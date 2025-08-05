@@ -508,11 +508,11 @@ endmodule
                 if rhs.operator == '+':
                     rhs = p0
                 elif rhs.operator in ('~', '-'):
-                    rhs = f'{rhs.operator}{p0}'
+                    rhs = f'{rhs.operator} {p0}'
                 elif rhs.operator == 'b':
                     rhs = f'{p0} != {cls._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
                 elif rhs.operator in ('r|', 'r&', 'r^'):
-                    rhs = f'({rhs.operator[-1]} {p0})'
+                    rhs = f'{rhs.operator[-1]} {p0}'
                 elif rhs.operator == "u":
                     rhs = p0    # TODO: Check
                 elif rhs.operator == "s":
@@ -551,9 +551,14 @@ class Signal:
         self.domain = domain
         self.statements = []
 
+        self._no_reset_statement = False
+
+    def disable_reset_statement(self):
+        self._no_reset_statement = True
+
     @property
     def reset_statement(self):
-        if self.domain is not None:
+        if self.domain is not None or self._no_reset_statement:
             return None
 
         assigned_bits = [False] * len(self.signal)
@@ -1019,8 +1024,10 @@ class Module:
             submodule = None
         else:
             for port_name, (port_value, kind) in subfragment.named_ports.items():
+                local_signal = None
                 if kind == 'io':
                     ports[port_name] = port_value   # TODO: Check how to handle!
+                    local_signal = self._signals.get(port_value, None)
                 else:
                     new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
                     ports[port_name] = new_port
@@ -1028,8 +1035,12 @@ class Module:
                         self._execute_statements([new_port.eq(port_value)])
                     elif kind == 'o':
                         self._execute_statements([port_value.eq(new_port)])
+                        local_signal = self._signals[port_value]
                     else:
                         raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
+
+                if local_signal is not None:
+                    local_signal.disable_reset_statement()
 
         return submodule, ports
 
@@ -1047,6 +1058,10 @@ class Module:
             else:
                 submodule._prepare(True)
                 ports = None
+                for port in submodule.ports:
+                    local_signal = self._signals.get(port.signal, None)
+                    if port.direction in ['o', 'io'] and local_signal is not None:
+                        local_signal.disable_reset_statement()
 
             if submodule is not None:
                 self.submodules[name] = (submodule, ports)
