@@ -56,7 +56,9 @@ class Signal:
         return name
 
     def add_statement(self, statement):
-        self.statements.append(statement)   # TODO: Use context-aware statements!
+        if not isinstance(statement, list):
+            statement = [statement]
+        self.statements.extend(statement)
 
 class Port(Signal):
     def __init__(self, signal, direction, domain=None):
@@ -105,8 +107,7 @@ class Module:
         self.fragment = fragment
         self.case_sensitive = case_sensitive
 
-        self.statements = []
-        self.submodules = []
+        self.submodules = {}
         self._signals = ast.SignalDict()
 
     @staticmethod
@@ -117,7 +118,6 @@ class Module:
     def _reset(self):
         self._signals.clear()
         self.submodules.clear()
-        self.statements.clear()
 
     def _sanitize_signal(self, signal):
         def change_case(name):
@@ -161,10 +161,10 @@ class Module:
     def prepare(self, ports=None, platform=None):
         self._reset()
         self.fragment = ir.Fragment.get(self.fragment, platform).prepare(ports)
-        print(self.fragment.statements)
 
         self._prepare_signals()
         self._prepare_statements()
+        self._prepare_submodules()
 
     def _prepare_signals(self):
         for port, direction in self.fragment.ports.items():
@@ -381,10 +381,39 @@ class Module:
 
         return res
 
-    def _prepare_statements(self):
-        for statement in self.fragment.statements:
+    def _execute_statements(self, statements):
+        for statement in statements:
             for signal, st in self._process_statement(statement):
                 self._add_new_statement(signal, st)
+
+    def _prepare_statements(self):
+        self._execute_statements(self.fragment.statements)
+
+    def _prepare_submodules(self):
+        for subfragment, subname in self.fragment.subfragments:
+            name = self.sanitize_module(subname)
+
+            submodule = Module(name, subfragment, case_sensitive=self.case_sensitive)
+
+            if isinstance(subfragment, ir.Instance):
+                ports = {}
+                for port_name, (port_value, kind) in subfragment.named_ports.items():
+                    new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
+                    ports[port_name] = (new_port, kind)
+                    if kind == 'i':
+                        self._execute_statements([new_port.eq(port_value)])
+                    elif kind == 'o':
+                        self._execute_statements([port_value.eq(new_port)])
+                    elif kind == 'io':
+                        pass    # TODO: Check how to handle!
+                    else:
+                        raise RuntimeError(f"Unknown port type for port {port_name} for submodule {name} of module {self.name}: {kind}")
+
+            else:
+                submodule.prepare()
+                ports = None
+
+            self.submodules[name] = (submodule, ports)
 
 def v2vhdl(module, name='top', ports=None, blackboxes=None):
     m = Module(name, module, case_sensitive=True)
