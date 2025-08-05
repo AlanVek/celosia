@@ -486,7 +486,7 @@ endmodule
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
-            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts)} }}"
+            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1])} }}"
         elif isinstance(rhs, ast.Slice):
             if rhs.stop == rhs.start + 1:
                 idx = rhs.start
