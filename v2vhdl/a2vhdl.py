@@ -1,6 +1,8 @@
 from amaranth.hdl import ast, ir
 from textwrap import dedent, indent
 
+# TODO: Some signals may be missing when user forgets to manually add all ports!
+
 class HDL:
     case_sensitive = False
 
@@ -113,7 +115,34 @@ class VHDL(HDL):
 
 class Verilog(HDL):
     case_sensitive = False
-    protected = []
+    protected = [
+        'always',         'and',            'assign',         'begin',
+        'buf',            'bufif0',         'bufif1',         'case',
+        'casex',          'casez',          'cmos',           'deassign',
+        'default',        'defparam',       'design',         'disable',
+        'edge',           'else',           'end',            'endcase',
+        'endfunction',    'endmodule',      'endprimitive',   'endspecify',
+        'endtable',       'endtask',        'event',          'for',
+        'force',          'forever',        'fork',           'function',
+        'highz0',         'highz1',         'if',             'ifnone',
+        'initial',        'inout',          'input',          'integer',
+        'join',           'large',          'localparam',     'macromodule',
+        'medium',         'module',         'nand',           'negedge',
+        'nmos',           'nor',            'not',            'notif0',
+        'notif1',         'or',             'output',         'parameter',
+        'pmos',           'posedge',        'primitive',      'pull0',
+        'pull1',          'pulldown',       'pullup',         'rcmos',
+        'real',           'realtime',       'reg',            'release',
+        'repeat',         'rnmos',          'rpmos',          'rtran',
+        'rtranif0',       'rtranif1',       'scalared',       'small',
+        'specify',        'specparam',      'strong0',        'strong1',
+        'supply0',        'supply1',        'table',          'task',
+        'time',           'tran',           'tranif0',        'tranif1',
+        'tri',            'tri0',           'tri1',           'triand',
+        'trior',          'trireg',         'vectored',       'wait',
+        'wand',           'weak0',          'weak1',          'while',
+        'wire',           'wor',            'xnor',           'xor',
+    ]
 
     template = """module {name} (
 {port_block}
@@ -207,7 +236,7 @@ endmodule
                     statement = mapping.reset_statement
                 else:
                     continue
-                assignment_block += f'assign {cls._generate_one_assignment(mapping, statement, symbol="<=")};\n'
+                assignment_block += f'assign {cls._generate_one_assignment(mapping, statement, symbol="=")};\n'
             else:
                 blocks_block += f'{cls._generate_one_block(mapping, module)}'
 
@@ -231,7 +260,12 @@ endmodule
                     if mapping.domain is not None:
                         reset = cls._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
 
-            res += f'{type} {cls._generate_one_signal(mapping)}'
+                dir = ''
+                if isinstance(mapping, Port):
+                    dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
+                    dir += ' '
+
+            res += f'{dir}{type} {cls._generate_one_signal(mapping)}'
             if reset is not None:
                 res += f' = {reset}'
             res += ';\n'
@@ -265,6 +299,7 @@ endmodule
 
     @classmethod
     def _generate_one_port(cls, port):
+        return cls._generate_one_signal(port, size=False)
         dir = 'input' if port.direction == 'i' else 'output' if port.direction == 'o' else 'inout'
         return f'{dir} {cls._generate_one_signal(port, size=False)}'
 
@@ -370,14 +405,24 @@ endmodule
             if case is None:
                 case = 'default'
 
-            body += f'    {case}:\n'
+
+            if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], Assign)):
+                begin = ' begin'
+                end = 'end\n'
+            else:
+                begin = end = ''
+
+            if statements:
+                print(begin, end, statements[0])
+
+            body += f'    {case}:{begin}\n'
 
             if statements:
                 case_body = cls._generate_statements(mapping, statements, symbol=symbol)
             else:
                 case_body = '/* empty */;\n'    # TODO: Filter empty cases when possible
 
-            body += indent(case_body, ' '*8)
+            body += indent(case_body + end, ' '*8)
 
         footer = 'endcase'
 
@@ -436,12 +481,12 @@ endmodule
     @classmethod
     def _parse_rhs(cls, rhs):
         if isinstance(rhs, ast.Const):
-            value = rhs.value
-            if value < 0:
-                rhs.value = 2**rhs.width + rhs.value
-                rhs = cls._parse_rhs(ast.Operator('s', [rhs]))
-            else:
-                rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
+            fmt = 'h'
+            sign = ''
+            if rhs.value < 0:
+                sign += '-'
+                fmt = f's{fmt}'
+            rhs = f"{sign}{rhs.width}'{fmt}{hex(abs(rhs.value))[2:]}"
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
@@ -451,7 +496,16 @@ endmodule
                 idx = rhs.start
             else:
                 idx = f'{rhs.stop-1}:{rhs.start}'
-            rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
+
+            if isinstance(rhs.value, ast.Const):
+                value = rhs.value.value
+                if value < 0:
+                    value += 2**rhs.value.width
+                value = format(value, f'0{rhs.value.width}b')[::-1][rhs.start:rhs.stop][::-1]
+                rhs = cls._parse_rhs(ast.Const(int(value, 2), len(value)))
+            else:
+                rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
+
         elif isinstance(rhs, ast.Operator):
             parsed = list(map(cls._parse_rhs, rhs.operands))
             if len(rhs.operands) == 1:
