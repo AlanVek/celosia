@@ -10,7 +10,7 @@ class HDL:
 
     @classmethod
     def convert(cls, fragment, name='top', ports=None, platform=None):
-        m = Module(name, fragment, hdl=cls, case_sensitive=cls.case_sensitive)
+        m = Module(name, fragment, hdl=cls)
         m.prepare(ports, platform)
 
         return cls._convert_module(m)
@@ -73,18 +73,34 @@ class VHDL(HDL):
 
     @classmethod
     def sanitize(cls, name):
-        name = super().sanitize(name)
-        name = name.strip().replace('\\', '').replace('$', '_esc_').replace('.', '_').replace(':', '_')
+        name = super().sanitize(name).strip()
+
+        replace_map = {
+            '\\': '',
+            '$': '_esc_',
+            '.': '_',
+            ':': '_',
+            '[': '_',
+            ']': '_',
+            '(': '_',
+            ')': '_',
+            '{': '_',
+            '}': '_',
+        }
+
+        for old, new in replace_map.items():
+            name = name.replace(old, new)
+
         while '__' in name:
             name = name.replace('__', '_')
+
         if name and name[0] == '_':
             name = name[1:]
         if name and name[-1] == '_':
             name = name[:-1]
 
-        for p in cls.protected:
-            if name == p:
-                name = 'esc_' + name
+        while name in cls.protected:
+            name = 'esc_' + name
 
         if not name:
             name = cls.sanitize('unnamed')
@@ -108,19 +124,36 @@ endmodule
 
     @classmethod
     def sanitize(cls, name):
-        name = super().sanitize(name)
+        name = super().sanitize(name).strip()
+
         # TODO: Update sanitization for Verilog
-        name = name.strip().replace('\\', '').replace('$', '_esc_').replace('.', '_').replace(':', '_')
+
+        replace_map = {
+            '\\': '',
+            '$': '_esc_',
+            '.': '_',
+            ':': '_',
+            '[': '_',
+            ']': '_',
+            '(': '_',
+            ')': '_',
+            '{': '_',
+            '}': '_',
+        }
+
+        for old, new in replace_map.items():
+            name = name.replace(old, new)
+
         while '__' in name:
             name = name.replace('__', '_')
+
         if name and name[0] == '_':
             name = name[1:]
         if name and name[-1] == '_':
             name = name[:-1]
 
-        for p in cls.protected:
-            if name == p:
-                name = 'esc_' + name
+        while name in cls.protected:
+            name = 'esc_' + name
 
         if not name:
             name = cls.sanitize('unnamed')
@@ -138,7 +171,6 @@ endmodule
         port_block, initial_block, assignment_block, blocks_block = cls._parse_signals(module)
         submodules_block = cls._generate_submodule_blocks(module, curr_types)
 
-        # TODO: Handle initial begin (for mems) and reg/wire with reset for regular signals
         # TODO: Guarantee no collisions with Instance names
 
         res = cls.template.format(
@@ -160,7 +192,7 @@ endmodule
     def _parse_signals(cls, module):
         port_block = initial_block = assignment_block = blocks_block = ''
 
-        for signal, mapping in module._signals.items():
+        for mapping in module._signals.values():
             initial_block += cls._generate_initial(mapping)
             if isinstance(mapping, Port):
                 port_block += f'{cls._generate_one_port(mapping)},\n'
@@ -188,16 +220,16 @@ endmodule
         res = ''
 
         if isinstance(mapping, Signal):
+            reset = None
             if isinstance(mapping, Memory):
                 type = 'reg'
-                reset = None
             else:
                 if mapping.static:
                     type = 'wire'
-                    reset = None
                 else:
                     type = 'reg'
-                    reset = cls._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
+                    if mapping.domain is not None:
+                        reset = cls._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
 
             res += f'{type} {cls._generate_one_signal(mapping)}'
             if reset is not None:
@@ -213,16 +245,16 @@ endmodule
         return res
 
     @staticmethod
-    def _generate_one_signal(mapping):
+    def _generate_one_signal(mapping, size=True):
         if len(mapping.signal) <= 0:
             raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
 
-        if len(mapping.signal) == 1:
+        if not size or len(mapping.signal) == 1:
             width = ''
         else:
             width = f'[{len(mapping.signal) - 1}:0] '
 
-        if isinstance(mapping, Memory):
+        if size and isinstance(mapping, Memory):
             if len(mapping.init) <= 0:
                 raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
             depth = f' [{len(mapping.init) - 1}:0]'
@@ -234,7 +266,7 @@ endmodule
     @classmethod
     def _generate_one_port(cls, port):
         dir = 'input' if port.direction == 'i' else 'output' if port.direction == 'o' else 'inout'
-        return f'{dir} {cls._generate_one_signal(port)}'
+        return f'{dir} {cls._generate_one_signal(port, size=False)}'
 
     @classmethod
     def _generate_one_assignment(cls, mapping, statement, symbol):
@@ -245,7 +277,7 @@ endmodule
         repr = mapping.signal.name
 
         if isinstance(mapping, Memory):
-            repr = f'{repr}[{cls._parse_rhs(mapping.r_index)}]'
+            repr = f'{repr}[{cls._parse_rhs(mapping.w_index)}]'
         elif start_idx is not None and stop_idx is not None:
             if start_idx != 0 or stop_idx != len(mapping.signal):
                 if stop_idx == start_idx + 1:
@@ -323,7 +355,7 @@ endmodule
         body = ''
         for case, statements in statement.cases.items():
             if isinstance(case, str):
-                case = int(case)    # TODO: Check correct conversion
+                case = int(case, 2)
 
             if case is not None and not isinstance(case, int):
                 raise RuntimeError(f"Unknown case for switch: {case}")
@@ -400,10 +432,6 @@ endmodule
     def _parse_rhs(cls, rhs):
         if isinstance(rhs, ast.Const):
             rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
-        elif isinstance(rhs, int):
-            pass    # We don't have width!
-        elif isinstance(rhs, str):
-            rhs = cls._parse_rhs(int(rhs, 0))
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
@@ -415,9 +443,42 @@ endmodule
                 idx = f'{rhs.stop-1}:{rhs.start}'
             rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
         elif isinstance(rhs, ast.Operator):
-            pass    # TODO: Generate operators
+            parsed = list(map(cls._parse_rhs, rhs.operands))
+            if len(rhs.operands) == 1:
+                p0 = parsed[0]
+                if rhs.operator == '+':
+                    rhs = p0
+                elif rhs.operator in ('~', '-'):
+                    rhs = f'{rhs.operator}{p0}'
+                elif rhs.operator == 'b':
+                    rhs = f'{p0} != {cls._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
+                elif rhs.operator in ('r|', 'r&', 'r^'):
+                    rhs = f'({rhs.operator[-1]} {p0})'
+                elif rhs.operator == "u":
+                    rhs = p0    # TODO: Check
+                elif rhs.operator == "s":
+                    rhs = f'$signed({p0})'
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            elif len(rhs.operands) == 2:
+                p0, p1 = parsed
+                if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
+                    rhs = f'{p0} {rhs.operator[0]} {p1}'
+                elif rhs.operator in ('<', '<=', '==', '!=', '>', '>=', '<<', '>>'):
+                    rhs = f'{p0} {rhs.operator} {p1}'
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            elif len(rhs.operands) == 3:
+                p0, p1, p2 = parsed
+                if rhs.operator == "m":
+                    rhs = f'{p0} ? {p1} : {p2}'
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            else:
+                raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
         elif isinstance(rhs, ast.Part):
-            rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'   # TODO: Check mask or guarantee size using intermediate signal
+            rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'   # TODO: Check size mismatch (probably OK)
         elif isinstance(rhs, Memory):
             rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.r_index)}]'
         else:
@@ -450,7 +511,7 @@ class Signal:
 
                 for bit in range(start_idx, stop_idx):
                     if assigned_bits[bit]:
-                        pass    # TODO: Possible error?
+                        pass    # TODO: Possible Verilog error?
                     assigned_bits[bit] = True
 
         if all(assigned_bits):
@@ -531,17 +592,14 @@ class Switch(Statement):
         return case
 
 class Module:
-    def __init__(self, name, fragment, hdl=None, case_sensitive=False):
+    def __init__(self, name, fragment, hdl=None):
         self.name = name
         self.fragment = fragment
         self.hdl = hdl
-        self.case_sensitive = case_sensitive
 
         self.submodules = {}
         self._signals = ast.SignalDict()
         self.ports = []
-
-        self._subports = ast.SignalSet()
 
     @property
     def empty(self):
@@ -563,6 +621,10 @@ class Module:
     @property
     def domains(self):
         return self.fragment.domains
+
+    @property
+    def case_sensitive(self):
+        return bool(getattr(self.hdl, 'case_sensitive', False))
 
     def _change_case(self, name):
         return name if self.case_sensitive else name.lower()
@@ -754,11 +816,7 @@ class Module:
         if isinstance(rhs, ast.Const):
             pass
         elif isinstance(rhs, ast.Signal):
-            ##################
-            if rhs not in self._signals:    # TODO: Check
-                self._subports.add(rhs)
-            ##################
-            pass
+            pass    # TODO: Check. If rhs not in self._signals, probably it's a submodule's port. Do we care?
         elif isinstance(rhs, ast.Cat):
             if len(rhs.parts) == 0:
                 rhs = self._zero_size_signal()
@@ -867,7 +925,7 @@ class Module:
     def _process_memory(self, submodule):
         fragment = submodule.fragment
 
-        m = MemoryModule(submodule.name, fragment, hdl=self.hdl, case_sensitive=self.case_sensitive)
+        m = MemoryModule(submodule.name, fragment, hdl=self.hdl)
         m.prepare()
 
         for signal, mapping in m._signals.items():
@@ -893,16 +951,17 @@ class Module:
             submodule = None
         else:
             for port_name, (port_value, kind) in subfragment.named_ports.items():
-                new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
-                ports[port_name] = new_port
-                if kind == 'i':
-                    self._execute_statements([new_port.eq(port_value)])
-                elif kind == 'o':
-                    self._execute_statements([port_value.eq(new_port)])
-                elif kind == 'io':
-                    pass    # TODO: Check how to handle!
+                if kind == 'io':
+                    ports[port_name] = port_value   # TODO: Check how to handle!
                 else:
-                    raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
+                    new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
+                    ports[port_name] = new_port
+                    if kind == 'i':
+                        self._execute_statements([new_port.eq(port_value)])
+                    elif kind == 'o':
+                        self._execute_statements([port_value.eq(new_port)])
+                    else:
+                        raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
         return submodule, ports
 
@@ -913,7 +972,7 @@ class Module:
 
             name = self.sanitize_module(subname)
 
-            submodule = Module(name, subfragment, hdl=self.hdl, case_sensitive=self.case_sensitive)
+            submodule = Module(name, subfragment, hdl=self.hdl)
 
             if isinstance(subfragment, ir.Instance):
                 submodule, ports = self._process_submodule_instance(submodule)
@@ -925,8 +984,8 @@ class Module:
                 self.submodules[name] = (submodule, ports)
 
 class MemoryModule(Module):
-    def __init__(self, name, fragment, hdl=None, case_sensitive=False):
-        super().__init__(name, fragment, hdl=hdl, case_sensitive=case_sensitive)
+    def __init__(self, name, fragment, hdl=None):
+        super().__init__(name, fragment, hdl=hdl)
         self._mem = None
 
     def _prepare_signals(self):
@@ -954,10 +1013,10 @@ class MemoryModule(Module):
             self._signals.pop(signal)
 
         self._clean_statements(self.fragment.statements, remove_signals)
-        # TODO: Check duplicated statements
 
     def _clean_statements(self, statements, remove_signals):
         remove_statements = []
+        last_statement = None
         for i, statement in enumerate(statements):
             if isinstance(statement, ast.Assign):
                 for signal in remove_signals:
@@ -968,6 +1027,12 @@ class MemoryModule(Module):
             elif isinstance(statement, ast.Switch):
                 for sw_statements in statement.cases.values():
                     self._clean_statements(sw_statements, remove_signals)
+
+                # Ugly fix for duplicated rst statements
+                if str(statement) == str(last_statement):
+                    remove_statements.append(i)
+
+            last_statement = statement
 
         for i in reversed(remove_statements):
             statements.pop(i)
