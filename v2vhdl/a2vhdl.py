@@ -97,11 +97,9 @@ class Verilog(HDL):
     template = """module {name} (
 {port_block}
 );
-{submodules_block}
-{blocks_block}
-{assignment_block}
+{submodules_block}{blocks_block}{assignment_block}
 endmodule
-        """
+"""
 
     @classmethod
     def sanitize(cls, name):
@@ -121,20 +119,33 @@ endmodule
         return name
 
     @classmethod
-    def _convert_module(cls, module):
-        res = cls.template
+    def _convert_module(cls, module, curr_types = None):
+        if curr_types is None:
+            curr_types = []
+
+        print(module.name, module.empty)
+        if module.empty:
+            return ''
+
         port_block, assignment_block, blocks_block = cls._parse_signals(module)
-        submodules_block = '    '
+        submodules_block = cls._generate_submodule_blocks(module, curr_types)
 
-        # TODO: Handle initial begin (for mems)
+        # TODO: Handle initial begin (for mems) and reg/wire with reset for regular signals
+        # TODO: Guarantee no collisions with Instance names
 
-        return res.format(
+        res = cls.template.format(
             name = module.name,
             port_block = port_block,
             assignment_block = assignment_block,
             submodules_block = submodules_block,
             blocks_block = blocks_block,
         )
+        for submodule, ports in module.submodules.values():
+            if ports is not None:   # Instance
+                continue
+            res += '\n' + cls._convert_module(submodule, curr_types)
+
+        return res
 
     @classmethod
     def _parse_signals(cls, module):
@@ -144,12 +155,17 @@ endmodule
             if isinstance(mapping, Port):
                 port_block += f'{cls._generate_one_port(mapping)},\n'
 
+                if mapping.direction == 'i':
+                    continue
+
             if mapping.static:
                 if mapping.statements:
                     statement = mapping.statements[0]
                 elif mapping.reset_statement is not None:
                     statement = mapping.reset_statement
-                assignment_block += f'assign {cls._generate_one_assignment(signal, statement, symbol="<=")};\n'
+                else:
+                    continue
+                assignment_block += f'assign {cls._generate_one_assignment(mapping, statement, symbol="<=")};\n'
             else:
                 blocks_block += f'{cls._generate_one_block(mapping, module)}'
 
@@ -173,15 +189,17 @@ endmodule
         return f'{dir} {type} {width}{port.signal.name}'
 
     @classmethod
-    def _generate_one_assignment(cls, signal, statement, symbol):
+    def _generate_one_assignment(cls, mapping, statement, symbol):
         start_idx = statement._start_idx
         stop_idx = statement._stop_idx
 
         # TODO: Validate rhs size == lhs size or take slice
+        repr = mapping.signal.name
 
-        repr = signal.name
-        if start_idx is not None and stop_idx is not None:
-            if start_idx != 0 or stop_idx != len(signal):
+        if isinstance(mapping, Memory):
+            repr = f'{repr}[{cls._parse_rhs(mapping.r_index)}]'
+        elif start_idx is not None and stop_idx is not None:
+            if start_idx != 0 or stop_idx != len(mapping.signal):
                 if stop_idx == start_idx + 1:
                     repr = f'{repr}[{start_idx}]'
                 else:
@@ -238,7 +256,7 @@ endmodule
         res = ''
 
         if isinstance(statement, Assign):
-            res += f"{cls._generate_one_assignment(mapping.signal, statement, symbol=symbol)};\n"
+            res += f"{cls._generate_one_assignment(mapping, statement, symbol=symbol)};\n"
 
         elif isinstance(statement, Switch):
             res += f"{cls._generate_switch(mapping, statement, symbol=symbol)}"
@@ -281,6 +299,56 @@ endmodule
         return dedent(f'{header}\n{body[:-1]}\n{footer}\n')
 
     @classmethod
+    def _generate_submodule_blocks(cls, module, curr_types):
+        res = ''
+
+        for name, (submodule, ports) in module.submodules.items():
+            params = {}
+            if ports is None:
+                if isinstance(submodule.fragment, ir.Instance):
+                    raise RuntimeError(f"Found invalid submodule configuration for submodule {name} of module {module.name}")
+
+                if submodule.empty:
+                    continue
+
+                ports = {}
+                for port in submodule.ports:
+                    # if port.signal not in module._signals:
+                    #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
+                    ports[port.signal.name] = port.signal
+
+                type = name
+                idx = 0
+                _curr_types = list(map(module._change_case, curr_types))
+                while module._change_case(type) in _curr_types:
+                    type = f'{type}{idx}'
+                    idx += 1
+
+            else:
+                if not isinstance(submodule.fragment, ir.Instance):
+                    raise RuntimeError(f"Found invalid submodule configuration for submodule {name} of module {module.name}")
+
+                params.update(submodule.fragment.parameters)
+                type = submodule.fragment.type
+
+            curr_types.append(type)
+            res += f'{type}'
+
+            if params:
+                res += ' #(\n'
+                for key, value in params.items():
+                    res += f'    .{key}({value}),\n'   # TODO: Check types
+                res = res[:-2] + '\n)'
+
+            res += f' {name} (\n'
+            for key, value in ports.items():
+                res += f'    .{key}({cls._parse_rhs(value)}),\n'
+
+            res = res[:-2] + '\n);\n'
+
+        return indent(res, ' '*4)
+
+    @classmethod
     def _parse_rhs(cls, rhs):
         if isinstance(rhs, ast.Const):
             rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
@@ -301,7 +369,7 @@ endmodule
         elif isinstance(rhs, Memory):
             rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.r_index)}]'
         else:
-            raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
+            raise ValueError("Unknown RHS object detected: {}".format(rhs))
 
         return rhs
 
@@ -311,10 +379,32 @@ class Signal:
         self.domain = domain
         self.statements = []
 
-        self.reset_statement = None
+    @property
+    def reset_statement(self):
+        if self.domain is not None:
+            return None
 
-        if domain is None:
-            self.reset_statement = Assign(ast.Const(0, len(signal)))
+        assigned_bits = [False] * len(self.signal)
+
+        for statement in self.statements:
+            if isinstance(statement, Assign):
+                start_idx = statement._start_idx
+                stop_idx = statement._stop_idx
+
+                if start_idx is None:
+                    start_idx = 0
+                if stop_idx is None:
+                    stop_idx = len(self.signal)
+
+                for bit in range(start_idx, stop_idx):
+                    if assigned_bits[bit]:
+                        pass    # TODO: Possible error?
+                    assigned_bits[bit] = True
+
+        if all(assigned_bits):
+            return None
+
+        return Assign(ast.Const(0, len(self.signal)))
 
     @staticmethod
     def sanitize(name):
@@ -339,6 +429,9 @@ class Port(Signal):
     def __init__(self, signal, direction, domain=None):
         super().__init__(signal, domain)
         self.direction = direction
+
+        # if self.direction == 'i':
+        #     self.reset_statement = None
 
 class Memory(Signal):
     def __init__(self, signal, domain = None):
@@ -392,6 +485,25 @@ class Module:
         self.submodules = {}
         self._signals = ast.SignalDict()
         self.ports = []
+
+        self._subports = ast.SignalSet()
+
+    @property
+    def empty(self):
+        if not isinstance(self.fragment, ir.Fragment):
+            return True
+
+        res = True
+
+        res = res and not self.fragment.ports
+        res = res and not self.fragment.drivers
+        res = res and not self.fragment.statements
+        # res = res and not self.fragment.domains
+        res = res and not self.fragment.subfragments
+        res = res and not self.fragment.attrs
+        res = res and not self.fragment.generated
+
+        return res
 
     @property
     def domains(self):
@@ -586,6 +698,10 @@ class Module:
         if isinstance(rhs, ast.Const):
             pass
         elif isinstance(rhs, ast.Signal):
+            ##################
+            if rhs not in self._signals:    # TODO: Check
+                self._subports.add(rhs)
+            ##################
             pass
         elif isinstance(rhs, ast.Cat):
             if len(rhs.parts) == 0:
@@ -699,14 +815,17 @@ class Module:
         m.prepare()
 
         for signal, mapping in m._signals.items():
-            if signal not in self._signals:
+
+            # TODO: Make it so that the memory is read only once using Amaranth's __0__
+            if mapping is m._mem:
                 self._sanitize_signal(signal)
                 self._signals[signal] = mapping
             else:
+                if signal not in self._signals:
+                    self._sanitize_signal(signal)
+                    self._signals[signal] = Signal(mapping.signal, mapping.domain)
                 for statement in mapping.statements:
                     self._signals[signal].add_statement(statement)
-
-        return submodule, None
 
     def _process_submodule_instance(self, submodule):
         ports = {}
@@ -714,11 +833,12 @@ class Module:
         subfragment = submodule.fragment
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
-            submodule, ports = self._process_memory(submodule)
+            self._process_memory(submodule)
+            submodule = None
         else:
             for port_name, (port_value, kind) in subfragment.named_ports.items():
                 new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
-                ports[port_name] = (new_port, kind)
+                ports[port_name] = new_port
                 if kind == 'i':
                     self._execute_statements([new_port.eq(port_value)])
                 elif kind == 'o':
@@ -745,7 +865,8 @@ class Module:
                 submodule.prepare()
                 ports = None
 
-            self.submodules[name] = (submodule, ports)
+            if submodule is not None:
+                self.submodules[name] = (submodule, ports)
 
 class MemoryModule(Module):
     def __init__(self, name, fragment, case_sensitive=False):
