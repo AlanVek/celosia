@@ -10,7 +10,7 @@ class HDL:
 
     @classmethod
     def convert(cls, fragment, name='top', ports=None, platform=None):
-        m = Module(name, fragment, case_sensitive=cls.case_sensitive)
+        m = Module(name, fragment, hdl=cls, case_sensitive=cls.case_sensitive)
         m.prepare(ports, platform)
 
         return cls._convert_module(m)
@@ -73,17 +73,21 @@ class VHDL(HDL):
 
     @classmethod
     def sanitize(cls, name):
+        name = super().sanitize(name)
         name = name.strip().replace('\\', '').replace('$', '_esc_').replace('.', '_').replace(':', '_')
         while '__' in name:
             name = name.replace('__', '_')
         if name and name[0] == '_':
-            name = 'esc' + name
+            name = name[1:]
         if name and name[-1] == '_':
-            name = name + 'esc'
+            name = name[:-1]
 
         for p in cls.protected:
             if name == p:
                 name = 'esc_' + name
+
+        if not name:
+            name = cls.sanitize('unnamed')
 
         return name
 
@@ -93,28 +97,33 @@ class VHDL(HDL):
 
 class Verilog(HDL):
     case_sensitive = False
+    protected = []
 
     template = """module {name} (
 {port_block}
 );
-{submodules_block}{blocks_block}{assignment_block}
+{initials_block}{submodules_block}{blocks_block}{assignment_block}
 endmodule
 """
 
     @classmethod
     def sanitize(cls, name):
+        name = super().sanitize(name)
         # TODO: Update sanitization for Verilog
         name = name.strip().replace('\\', '').replace('$', '_esc_').replace('.', '_').replace(':', '_')
         while '__' in name:
             name = name.replace('__', '_')
         if name and name[0] == '_':
-            name = 'esc' + name
+            name = name[1:]
         if name and name[-1] == '_':
-            name = name + 'esc'
+            name = name[:-1]
 
         for p in cls.protected:
             if name == p:
                 name = 'esc_' + name
+
+        if not name:
+            name = cls.sanitize('unnamed')
 
         return name
 
@@ -123,11 +132,10 @@ endmodule
         if curr_types is None:
             curr_types = []
 
-        print(module.name, module.empty)
         if module.empty:
             return ''
 
-        port_block, assignment_block, blocks_block = cls._parse_signals(module)
+        port_block, initial_block, assignment_block, blocks_block = cls._parse_signals(module)
         submodules_block = cls._generate_submodule_blocks(module, curr_types)
 
         # TODO: Handle initial begin (for mems) and reg/wire with reset for regular signals
@@ -136,6 +144,7 @@ endmodule
         res = cls.template.format(
             name = module.name,
             port_block = port_block,
+            initials_block = initial_block,
             assignment_block = assignment_block,
             submodules_block = submodules_block,
             blocks_block = blocks_block,
@@ -149,9 +158,10 @@ endmodule
 
     @classmethod
     def _parse_signals(cls, module):
-        port_block = assignment_block = blocks_block = ''
+        port_block = initial_block = assignment_block = blocks_block = ''
 
         for signal, mapping in module._signals.items():
+            initial_block += cls._generate_initial(mapping)
             if isinstance(mapping, Port):
                 port_block += f'{cls._generate_one_port(mapping)},\n'
 
@@ -169,24 +179,62 @@ endmodule
             else:
                 blocks_block += f'{cls._generate_one_block(mapping, module)}'
 
-        blocks = (port_block, assignment_block, blocks_block)
+        port_block = port_block[:-2]
+        blocks = (port_block, initial_block, assignment_block, blocks_block)
         return (indent(block, ' '*4) for block in blocks)
 
+    @classmethod
+    def _generate_initial(cls, mapping):
+        res = ''
+
+        if isinstance(mapping, Signal):
+            if isinstance(mapping, Memory):
+                type = 'reg'
+                reset = None
+            else:
+                if mapping.static:
+                    type = 'wire'
+                    reset = None
+                else:
+                    type = 'reg'
+                    reset = cls._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
+
+            res += f'{type} {cls._generate_one_signal(mapping)}'
+            if reset is not None:
+                res += f' = {reset}'
+            res += ';\n'
+
+        if isinstance(mapping, Memory):
+            res += 'initial begin\n'
+            for i, reset in enumerate(mapping.init):
+                res += f'    {mapping.signal.name}[{i}] = {cls._parse_rhs(reset)};\n'
+            res += 'end\n'
+
+        return res
+
     @staticmethod
-    def _generate_one_port(port):
-        dir = 'input' if port.direction == 'i' else 'output' if port.direction == 'o' else 'inout'
+    def _generate_one_signal(mapping):
+        if len(mapping.signal) <= 0:
+            raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
 
-        if len(port.signal) <= 0:
-            raise RuntimeError(f"Zero-width port {port.signal.name} not allowed")
-
-        if len(port.signal) == 1:
+        if len(mapping.signal) == 1:
             width = ''
         else:
-            width = f'[{len(port.signal) - 1}:0] '
+            width = f'[{len(mapping.signal) - 1}:0] '
 
-        type = 'wire'   # TODO: Guarantee
+        if isinstance(mapping, Memory):
+            if len(mapping.init) <= 0:
+                raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
+            depth = f' [{len(mapping.init) - 1}:0]'
+        else:
+            depth = ''
 
-        return f'{dir} {type} {width}{port.signal.name}'
+        return f'{width}{mapping.signal.name}{depth}'
+
+    @classmethod
+    def _generate_one_port(cls, port):
+        dir = 'input' if port.direction == 'i' else 'output' if port.direction == 'o' else 'inout'
+        return f'{dir} {cls._generate_one_signal(port)}'
 
     @classmethod
     def _generate_one_assignment(cls, mapping, statement, symbol):
@@ -352,6 +400,10 @@ endmodule
     def _parse_rhs(cls, rhs):
         if isinstance(rhs, ast.Const):
             rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
+        elif isinstance(rhs, int):
+            pass    # We don't have width!
+        elif isinstance(rhs, str):
+            rhs = cls._parse_rhs(int(rhs, 0))
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
@@ -407,8 +459,9 @@ class Signal:
         return Assign(ast.Const(0, len(self.signal)))
 
     @staticmethod
-    def sanitize(name):
-        name = HDL.sanitize(name)
+    def sanitize(name, hdl=None):
+        if hdl is not None:
+            name = hdl.sanitize(name)
         return name
 
     def add_statement(self, statement):
@@ -437,6 +490,7 @@ class Memory(Signal):
     def __init__(self, signal, domain = None):
         super().__init__(signal, domain=domain)
         self.r_index = self.w_index = None
+        self.init = []
 
 class Statement:
     pass
@@ -477,9 +531,10 @@ class Switch(Statement):
         return case
 
 class Module:
-    def __init__(self, name, fragment, case_sensitive=False):
+    def __init__(self, name, fragment, hdl=None, case_sensitive=False):
         self.name = name
         self.fragment = fragment
+        self.hdl = hdl
         self.case_sensitive = case_sensitive
 
         self.submodules = {}
@@ -516,9 +571,12 @@ class Module:
         names = [self._change_case(signal.name) for signal in self._signals]
         names.extend(self._change_case(submodule.name) for submodule, _ in self.submodules.values())
 
-        name = HDL.sanitize(name)
+        if self.hdl is not None:
+            name = self.hdl.sanitize(name)
+
+        _name = name
         while self._change_case(name) in names:
-            name = f'{name}{idx}'
+            name = f'{_name}{idx}'
             idx += 1
         return name
 
@@ -531,9 +589,9 @@ class Module:
         names = [self._change_case(signal.name) for signal in self._signals]
 
         idx = 0
-        name = Signal.sanitize(signal.name)
+        name = _name = Signal.sanitize(signal.name, hdl=self.hdl)
         while self._change_case(name) in names:
-            name = f'{name}{idx}'
+            name = f'{_name}{idx}'
             idx += 1
 
         signal.name = name
@@ -545,9 +603,7 @@ class Module:
         return s
 
     def _new_signal(self, width=1, prefix=None):
-        name = 'tmp'
-        if prefix:
-            name = f'{prefix}_{name}'
+        name = prefix or 'tmp'
         new = ast.Signal(width, name=name)
         self._sanitize_signal(new)
         self._signals[new] = Signal(new)
@@ -555,7 +611,7 @@ class Module:
         return new
 
     def _zero_size_signal(self):
-        self._new_signal(0, prefix = '$empty')
+        self._new_signal(0, prefix = 'empty')
 
     def _add_new_statement(self, left, statement):
         self._get_signal(left).add_statement(statement)
@@ -610,7 +666,7 @@ class Module:
 
             rhs.index = self._process_rhs(rhs.index)
 
-            new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='$array')
+            new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='array')
 
             index = self._process_rhs(rhs.index)
             cases = {
@@ -709,7 +765,7 @@ class Module:
             elif len(rhs.parts) == 1:
                 rhs = self._process_rhs(rhs.parts[0])
             else:
-                new_rhs = self._new_signal(len(rhs), prefix='$concat')
+                new_rhs = self._new_signal(len(rhs), prefix='concat')
                 for i, part in enumerate(rhs.parts):
                     rhs.parts[i] = self._process_rhs(part)
 
@@ -725,12 +781,12 @@ class Module:
                 if rhs.start == 0 and rhs.stop >= len(rhs.value):
                     rhs = rhs.value
                 else:
-                    new_rhs = self._new_signal(len(rhs), prefix='$slice')
+                    new_rhs = self._new_signal(len(rhs), prefix='slice')
                     self._add_new_assign(new_rhs, rhs)
                     rhs = new_rhs
 
         elif isinstance(rhs, ast.Operator):
-            new_rhs = self._new_signal(len(rhs), prefix='$operand')
+            new_rhs = self._new_signal(len(rhs), prefix='operand')
             for i, operand in enumerate(rhs.operands):
                 rhs.operands[i] = self._process_rhs(operand)
 
@@ -741,7 +797,7 @@ class Module:
             if isinstance(rhs.offset, ast.Const):
                 raise RuntimeError("Part with const offset is Slice!")
             else:
-                new_rhs = self._new_signal(rhs.stride, prefix='$part')
+                new_rhs = self._new_signal(rhs.stride, prefix='part')
                 rhs.value = self._process_rhs(rhs.value)
                 rhs.offset = self._process_rhs(rhs.offset)
 
@@ -811,7 +867,7 @@ class Module:
     def _process_memory(self, submodule):
         fragment = submodule.fragment
 
-        m = MemoryModule(submodule.name, fragment, case_sensitive=self.case_sensitive)
+        m = MemoryModule(submodule.name, fragment, hdl=self.hdl, case_sensitive=self.case_sensitive)
         m.prepare()
 
         for signal, mapping in m._signals.items():
@@ -853,11 +909,11 @@ class Module:
     def _prepare_submodules(self):
         for subfragment, subname in self.fragment.subfragments:
             if subname is None:
-                subname = '$unnamed'
+                subname = 'unnamed'
 
             name = self.sanitize_module(subname)
 
-            submodule = Module(name, subfragment, case_sensitive=self.case_sensitive)
+            submodule = Module(name, subfragment, hdl=self.hdl, case_sensitive=self.case_sensitive)
 
             if isinstance(subfragment, ir.Instance):
                 submodule, ports = self._process_submodule_instance(submodule)
@@ -869,8 +925,8 @@ class Module:
                 self.submodules[name] = (submodule, ports)
 
 class MemoryModule(Module):
-    def __init__(self, name, fragment, case_sensitive=False):
-        super().__init__(name, fragment, case_sensitive)
+    def __init__(self, name, fragment, hdl=None, case_sensitive=False):
+        super().__init__(name, fragment, hdl=hdl, case_sensitive=case_sensitive)
         self._mem = None
 
     def _prepare_signals(self):
@@ -888,6 +944,7 @@ class MemoryModule(Module):
                 else:
                     remove_signals.append(signal)
 
+                self._mem.init.append(ast.Const(signal.reset, len(signal))) # TODO: Check if signals are in order
                 if self._mem.domain != mapping.domain:
                     raise RuntimeError(f"Conflicting domains for memory {self.name}")
 
