@@ -1,8 +1,6 @@
 from amaranth.hdl import ast, ir
 from textwrap import dedent, indent
 
-# TODO: Some signals may be missing when user forgets to manually add all ports!
-
 class HDL:
     case_sensitive = False
 
@@ -411,9 +409,6 @@ endmodule
                 end = 'end\n'
             else:
                 begin = end = ''
-
-            if statements:
-                print(begin, end, statements[0])
 
             body += f'    {case}:{begin}\n'
 
@@ -886,7 +881,10 @@ class Module:
         if isinstance(rhs, ast.Const):
             pass
         elif isinstance(rhs, ast.Signal):
-            pass    # TODO: Check. If rhs not in self._signals, probably it's a submodule's port. Do we care?
+            # Fix: Can happen with submodule ports
+            if rhs not in self._signals:
+                self._sanitize_signal(rhs)
+                self._signals[rhs] = Signal(rhs)
         elif isinstance(rhs, ast.Cat):
             if len(rhs.parts) == 0:
                 rhs = self._zero_size_signal()
