@@ -1,6 +1,8 @@
 from amaranth.hdl import ast, ir
 from textwrap import dedent, indent
 
+# TODO: If we find multiple signals with same statements, maybe we can merge them into one!
+
 class HDL:
     case_sensitive = False
 
@@ -352,7 +354,7 @@ endmodule
             symbol = '<='
 
         header = f'always @{triggers} begin'
-        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol), ' '*4)
+        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol)[:-1], ' '*4)
         footer = 'end'
 
         return dedent(f"{header}\n{blocks}\n{footer}\n")
@@ -403,10 +405,9 @@ endmodule
             if case is None:
                 case = 'default'
 
-
             if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], Assign)):
                 begin = ' begin'
-                end = 'end\n'
+                end = '    end\n'
             else:
                 begin = end = ''
 
@@ -417,7 +418,7 @@ endmodule
             else:
                 case_body = '/* empty */;\n'    # TODO: Filter empty cases when possible
 
-            body += indent(case_body + end, ' '*8)
+            body += indent(case_body, ' '*8) + end
 
         footer = 'endcase'
 
@@ -654,6 +655,23 @@ class Switch(Statement):
             raise ValueError("Integer case needs length!")
 
         return case
+
+    def converted_as_if(self):
+        real_cases = {
+            case: statements for case, statements in self.cases.items() if statements
+        }
+
+        # TODO: Check covered cases with ? to determine whether all cases are covered (equivalent to using default)!
+
+        if None in real_cases:
+            # If default has statements, allow if/else uf up to three cases if(==) else if (!=)
+            if len(self.cases) <= 3:
+                pass
+
+        else:
+            pass
+
+        return None
 
 class Module:
     def __init__(self, name, fragment, hdl=None):
