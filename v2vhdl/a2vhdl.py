@@ -348,29 +348,34 @@ endmodule
 
     @classmethod
     def _generate_switch(cls, mapping, statement, symbol):
-        header = f'case ({cls._parse_rhs(statement.test)})'
+        header = f'casez ({cls._parse_rhs(statement.test)})'
 
         # TODO: Change switch with 0/1 to if
 
         body = ''
         for case, statements in statement.cases.items():
             if isinstance(case, str):
-                case = int(case, 2)
+                try:
+                    case = int(case, 2)
+                    case = f"{len(statement.test)}'d{case}"
+                except ValueError:
+                    case = f"{len(statement.test)}'b{case}"
 
-            if case is not None and not isinstance(case, int):
+            elif isinstance(case, int):
+                case = f"{len(statement.test)}'d{case}"
+
+            elif case is not None:
                 raise RuntimeError(f"Unknown case for switch: {case}")
 
             if case is None:
                 case = 'default'
-            else:
-                case = f"{len(statement.test)}'d{case}"
 
             body += f'    {case}:\n'
 
             if statements:
                 case_body = cls._generate_statements(mapping, statements, symbol=symbol)
             else:
-                case_body = '/* empty */;\n'
+                case_body = '/* empty */;\n'    # TODO: Filter empty cases when possible
 
             body += indent(case_body, ' '*8)
 
@@ -431,7 +436,12 @@ endmodule
     @classmethod
     def _parse_rhs(cls, rhs):
         if isinstance(rhs, ast.Const):
-            rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
+            value = rhs.value
+            if value < 0:
+                rhs.value = 2**rhs.width + rhs.value
+                rhs = cls._parse_rhs(ast.Operator('s', [rhs]))
+            else:
+                rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
@@ -594,7 +604,8 @@ class Switch(Statement):
 class Module:
     def __init__(self, name, fragment, hdl=None):
         self.name = name
-        self.fragment = fragment
+        self._fragment = fragment
+        self.fragment = None
         self.hdl = hdl
 
         self.submodules = {}
@@ -642,7 +653,9 @@ class Module:
             idx += 1
         return name
 
-    def _reset(self):
+    def _reset(self, submodule=False):
+        if submodule:
+            self.fragment = self._fragment
         self._signals.clear()
         self.submodules.clear()
         self.ports.clear()
@@ -681,13 +694,16 @@ class Module:
     def _add_new_assign(self, left, right, start_idx=None, stop_idx=None):
         self._add_new_statement(left, Assign(right, start_idx, stop_idx))
 
-    def prepare(self, ports=None, platform=None):
-        self._reset()
-        self.fragment = ir.Fragment.get(self.fragment, platform).prepare(ports)
+    def _prepare(self, submodule=False):
+        self._reset(submodule)
 
         self._prepare_signals()
         self._prepare_statements()
         self._prepare_submodules()
+
+    def prepare(self, ports=None, platform=None):
+        self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
+        self._prepare(False)
 
     def _prepare_signals(self):
 
@@ -977,7 +993,7 @@ class Module:
             if isinstance(subfragment, ir.Instance):
                 submodule, ports = self._process_submodule_instance(submodule)
             else:
-                submodule.prepare()
+                submodule._prepare(True)
                 ports = None
 
             if submodule is not None:
