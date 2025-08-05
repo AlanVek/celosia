@@ -65,10 +65,9 @@ class Port(Signal):
         super().__init__(signal, domain)
         self.direction = direction
 
-# class Memory(Signal):
-#     def __init__(self, signal, index, domain=None):
-#         super().__init__(signal, domain)
-#         self.
+class Memory(Signal):
+    def __init__(self, signal, domain = None):
+        super().__init__(signal, domain=domain)
 
 class Statement:
     pass
@@ -109,10 +108,19 @@ class Module:
 
         self.submodules = {}
         self._signals = ast.SignalDict()
+        self.memories = []
 
-    @staticmethod
-    def sanitize_module(name):
+    def _change_case(self, name):
+        return name if self.case_sensitive else name.lower()
+
+    def sanitize_module(self, name):
+        names = [self._change_case(signal.name) for signal in self._signals]
+        names.extend(self._change_case(submodule.name) for submodule, _ in self.submodules.values())
+
         name = HDL.sanitize(name)
+        while self._change_case(name) in names:
+            name = f'{name}{idx}'
+            idx += 1
         return name
 
     def _reset(self):
@@ -120,14 +128,11 @@ class Module:
         self.submodules.clear()
 
     def _sanitize_signal(self, signal):
-        def change_case(name):
-            return name if self.case_sensitive else name.lower()
-
-        names = [change_case(signal.name) for signal in self._signals]
+        names = [self._change_case(signal.name) for signal in self._signals]
 
         idx = 0
         name = Signal.sanitize(signal.name)
-        while change_case(name) in names:
+        while self._change_case(name) in names:
             name = f'{name}{idx}'
             idx += 1
 
@@ -177,6 +182,44 @@ class Module:
                 self._sanitize_signal(signal)
                 entry = self._signals[signal] = Signal(signal)
             entry.domain = domain
+
+    def _process_lhs_array(self, lhs, rhs, start_idx=None, stop_idx=None):
+        case = 0
+        cases = {}
+
+        while True:
+            idx = case
+            if idx >= len(lhs.elems):
+                break
+
+            part = lhs.elems[idx]
+            cases[case] = self._process_lhs(part, rhs, start_idx, stop_idx)
+            case += 1
+
+        return self._open_switch(lhs.index, cases)
+
+    def _process_rhs_array(self, rhs):
+        if not rhs.elems:
+            rhs = self._zero_size_signal()
+        else:
+            for i, elem in enumerate(rhs.elems):
+                rhs.elems[i] = self._process_rhs(elem)
+
+            rhs.index = self._process_rhs(rhs.index)
+
+            new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='$array')
+
+            index = self._process_rhs(rhs.index)
+            cases = {
+                i: [Assign(elem)] for i, elem in enumerate(rhs.elems)
+            }
+            # if 2**len(index) > len(rhs.elems):
+            #     cases[None] = 0 # Default
+
+            self._add_new_statement(new_rhs, Switch(index, cases))
+            rhs = new_rhs
+
+        return rhs
 
     def _process_lhs(self, lhs, rhs, start_idx=None, stop_idx=None):
         res = []
@@ -241,19 +284,7 @@ class Module:
                 res.extend(self._open_switch(lhs.offset, cases))
 
         elif isinstance(lhs, ast.ArrayProxy):
-            case = 0
-            cases = {}
-
-            while True:
-                idx = case
-                if idx >= len(lhs.elems):
-                    break
-
-                part = lhs.elems[idx]
-                cases[case] = self._process_lhs(part, rhs, start_idx, stop_idx)
-                case += 1
-
-            res.extend(self._open_switch(lhs.index, cases))
+            res.extend(self._process_lhs_array(lhs, rhs, start_idx, stop_idx))
 
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
@@ -311,26 +342,7 @@ class Module:
                 rhs = new_rhs
 
         elif isinstance(rhs, ast.ArrayProxy):
-            if not rhs.elems:
-                rhs = self._zero_size_signal()
-            else:
-                for i, elem in enumerate(rhs.elems):
-                    rhs.elems[i] = self._process_rhs(elem)
-
-                rhs.index = self._process_rhs(rhs.index)
-
-                new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='$array')
-
-                index = self._process_rhs(rhs.index)
-                cases = {
-                    i: [Assign(elem)] for i, elem in enumerate(rhs.elems)
-                }
-                # if 2**len(index) > len(rhs.elems):
-                #     cases[None] = 0 # Default
-
-                self._add_new_statement(new_rhs, Switch(index, cases))
-                rhs = new_rhs
-
+            rhs = self._process_rhs_array(rhs)
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
 
@@ -389,31 +401,110 @@ class Module:
     def _prepare_statements(self):
         self._execute_statements(self.fragment.statements)
 
+    def _process_memory(self, submodule):
+        fragment = submodule.fragment
+
+        m = MemoryModule(submodule.name, fragment, case_sensitive=self.case_sensitive)
+        m.prepare()
+
+        for signal, mapping in m._signals.items():
+            if signal not in self._signals:
+                self._sanitize_signal(signal)
+                self._signals[signal] = mapping
+
+        return submodule, None
+
+    def _process_submodule_instance(self, submodule):
+        ports = {}
+
+        subfragment = submodule.fragment
+
+        if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
+            submodule, ports = self._process_memory(submodule)
+        else:
+            for port_name, (port_value, kind) in subfragment.named_ports.items():
+                new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
+                ports[port_name] = (new_port, kind)
+                if kind == 'i':
+                    self._execute_statements([new_port.eq(port_value)])
+                elif kind == 'o':
+                    self._execute_statements([port_value.eq(new_port)])
+                elif kind == 'io':
+                    pass    # TODO: Check how to handle!
+                else:
+                    raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
+
+        return submodule, ports
+
     def _prepare_submodules(self):
         for subfragment, subname in self.fragment.subfragments:
+            if subname is None:
+                subname = '$unnamed'
+
             name = self.sanitize_module(subname)
 
             submodule = Module(name, subfragment, case_sensitive=self.case_sensitive)
 
             if isinstance(subfragment, ir.Instance):
-                ports = {}
-                for port_name, (port_value, kind) in subfragment.named_ports.items():
-                    new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
-                    ports[port_name] = (new_port, kind)
-                    if kind == 'i':
-                        self._execute_statements([new_port.eq(port_value)])
-                    elif kind == 'o':
-                        self._execute_statements([port_value.eq(new_port)])
-                    elif kind == 'io':
-                        pass    # TODO: Check how to handle!
-                    else:
-                        raise RuntimeError(f"Unknown port type for port {port_name} for submodule {name} of module {self.name}: {kind}")
-
+                submodule, ports = self._process_submodule_instance(submodule)
             else:
                 submodule.prepare()
                 ports = None
 
             self.submodules[name] = (submodule, ports)
+
+class MemoryModule(Module):
+    def __init__(self, name, fragment, case_sensitive=False):
+        super().__init__(name, fragment, case_sensitive)
+        self._mem = None
+
+    def _prepare_signals(self):
+        super()._prepare_signals()
+
+        self._mem = None
+
+        remove_signals = []
+        for signal, mapping in self._signals.items():
+            if not isinstance(mapping, Port):
+                if self._mem is None:
+                    self._mem = Memory(signal, domain = mapping.domain)
+                    signal.name = 'mem'
+                    self._sanitize_signal(signal)
+                else:
+                    remove_signals.append(signal)
+
+                if self._mem.domain != mapping.domain:
+                    raise RuntimeError(f"Conflicting domains for memory {self.name}")
+
+        self._signals[self._mem.signal] = self._mem
+
+        for signal in remove_signals:
+            self._signals.pop(signal)
+
+        self._clean_statements(self.fragment.statements, remove_signals)
+        # TODO: Check duplicated statements
+
+    def _clean_statements(self, statements, remove_signals):
+        remove_statements = []
+        for i, statement in enumerate(statements):
+            if isinstance(statement, ast.Assign):
+                for signal in remove_signals:
+                    if statement.lhs is signal or statement.rhs is signal:
+                        remove_statements.append(i)
+                        break
+
+            elif isinstance(statement, ast.Switch):
+                for sw_statements in statement.cases.values():
+                    self._clean_statements(sw_statements, remove_signals)
+
+        for i in reversed(remove_statements):
+            statements.pop(i)
+
+    def _process_lhs_array(self, lhs, rhs, start_idx=None, stop_idx=None):
+        return [(self._mem.signal, Assign(rhs))]
+
+    def _process_rhs_array(self, rhs):
+        return self._mem
 
 def v2vhdl(module, name='top', ports=None, blackboxes=None):
     m = Module(name, module, case_sensitive=True)
