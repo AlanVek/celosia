@@ -2,6 +2,26 @@ from amaranth.hdl import ast, ir
 from textwrap import dedent, indent
 
 class HDL:
+    case_sensitive = False
+
+    @classmethod
+    def sanitize(cls, name):
+        return name
+
+    @classmethod
+    def convert(cls, fragment, name='top', ports=None, platform=None):
+        m = Module(name, fragment, case_sensitive=cls.case_sensitive)
+        m.prepare(ports, platform)
+
+        return cls._convert_module(m)
+
+    @classmethod
+    def _convert_module(cls, module):
+        return ''
+
+class VHDL(HDL):
+    case_sensitive = True
+
     protected = [
         'abs',                  'access',         'after',          'alias',          'all',
         'and',                  'architecture',   'array',          'assert',         'attribute',
@@ -28,8 +48,31 @@ class HDL:
         'when',                 'while',          'with',           'xnor',           'xor',
     ]
 
-    @staticmethod
-    def sanitize(name):
+    template = """library ieee;
+        use ieee.std_logic_1164.all;
+        use ieee.numeric_std.all;
+        use ieee.numeric_std_unsigned.all;
+
+        entity {name} is
+            port (
+{port_block}
+            );
+        end {name};
+
+        architecture rtl of {name} is
+{components_block}
+{constants_block}
+{types_block}
+{signal_block}
+        begin
+{assignment_block}
+{submodules_block}
+{blocks_block}
+        end rtl;
+        """
+
+    @classmethod
+    def sanitize(cls, name):
         name = name.strip().replace('\\', '').replace('$', '_esc_').replace('.', '_').replace(':', '_')
         while '__' in name:
             name = name.replace('__', '_')
@@ -38,17 +81,240 @@ class HDL:
         if name and name[-1] == '_':
             name = name + 'esc'
 
-        for p in HDL.protected:
+        for p in cls.protected:
             if name == p:
                 name = 'esc_' + name
 
         return name
+
+    @classmethod
+    def _convert_module(cls, module):
+        pass
+
+class Verilog(HDL):
+    case_sensitive = False
+
+    template = """module {name} (
+{port_block}
+);
+{submodules_block}
+{blocks_block}
+{assignment_block}
+endmodule
+        """
+
+    @classmethod
+    def sanitize(cls, name):
+        # TODO: Update sanitization for Verilog
+        name = name.strip().replace('\\', '').replace('$', '_esc_').replace('.', '_').replace(':', '_')
+        while '__' in name:
+            name = name.replace('__', '_')
+        if name and name[0] == '_':
+            name = 'esc' + name
+        if name and name[-1] == '_':
+            name = name + 'esc'
+
+        for p in cls.protected:
+            if name == p:
+                name = 'esc_' + name
+
+        return name
+
+    @classmethod
+    def _convert_module(cls, module):
+        res = cls.template
+        port_block, assignment_block, blocks_block = cls._parse_signals(module)
+        submodules_block = '    '
+
+        # TODO: Handle initial begin (for mems)
+
+        return res.format(
+            name = module.name,
+            port_block = port_block,
+            assignment_block = assignment_block,
+            submodules_block = submodules_block,
+            blocks_block = blocks_block,
+        )
+
+    @classmethod
+    def _parse_signals(cls, module):
+        port_block = assignment_block = blocks_block = ''
+
+        for signal, mapping in module._signals.items():
+            if isinstance(mapping, Port):
+                port_block += f'{cls._generate_one_port(mapping)},\n'
+
+            if mapping.static:
+                if mapping.statements:
+                    statement = mapping.statements[0]
+                elif mapping.reset_statement is not None:
+                    statement = mapping.reset_statement
+                assignment_block += f'assign {cls._generate_one_assignment(signal, statement, symbol="<=")};\n'
+            else:
+                blocks_block += f'{cls._generate_one_block(mapping, module)}'
+
+        blocks = (port_block, assignment_block, blocks_block)
+        return (indent(block, ' '*4) for block in blocks)
+
+    @staticmethod
+    def _generate_one_port(port):
+        dir = 'input' if port.direction == 'i' else 'output' if port.direction == 'o' else 'inout'
+
+        if len(port.signal) <= 0:
+            raise RuntimeError(f"Zero-width port {port.signal.name} not allowed")
+
+        if len(port.signal) == 1:
+            width = ''
+        else:
+            width = f'[{len(port.signal) - 1}:0] '
+
+        type = 'wire'   # TODO: Guarantee
+
+        return f'{dir} {type} {width}{port.signal.name}'
+
+    @classmethod
+    def _generate_one_assignment(cls, signal, statement, symbol):
+        start_idx = statement._start_idx
+        stop_idx = statement._stop_idx
+
+        # TODO: Validate rhs size == lhs size or take slice
+
+        repr = signal.name
+        if start_idx is not None and stop_idx is not None:
+            if start_idx != 0 or stop_idx != len(signal):
+                if stop_idx == start_idx + 1:
+                    repr = f'{repr}[{start_idx}]'
+                else:
+                    repr = f'{repr}[{stop_idx-1}:{start_idx}]'
+        elif start_idx is not None or stop_idx is not None:
+            raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
+
+        return f'{repr} {symbol} {cls._parse_rhs(statement.rhs)}'
+
+    @classmethod
+    def _generate_one_block(cls, mapping, module):
+
+        statements = []
+
+        if mapping.reset_statement is not None:
+            statements.append(mapping.reset_statement)
+        statements.extend(mapping.statements)
+
+        if not statements:
+            return ''
+
+        if mapping.domain is None:
+            triggers = '*'
+            symbol = '='
+        else:
+            triggers = '('
+            domain = module.domains.get(mapping.domain, None)
+            if domain is None:
+                raise RuntimeError(f"Unknown domain for module {module.name}: {mapping.domain}")
+
+            triggers += f'{domain.clk_edge}edge {cls._parse_rhs(domain.clk)}'
+
+            if domain.async_reset and domain.rst is not None:
+                triggers += f', posedge {cls._parse_rhs(domain.rst)}'
+
+            triggers += ')'
+            symbol = '<='
+
+        header = f'always @{triggers} begin'
+        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol), ' '*4)
+        footer = 'end'
+
+        return dedent(f"{header}\n{blocks}\n{footer}\n")
+
+    @classmethod
+    def _generate_statements(cls, mapping, statements, symbol):
+        res = ''
+        for statement in statements:
+            res += cls._generate_one_statement(mapping, statement, symbol)
+        return res
+
+    @classmethod
+    def _generate_one_statement(cls, mapping, statement, symbol):
+        res = ''
+
+        if isinstance(statement, Assign):
+            res += f"{cls._generate_one_assignment(mapping.signal, statement, symbol=symbol)};\n"
+
+        elif isinstance(statement, Switch):
+            res += f"{cls._generate_switch(mapping, statement, symbol=symbol)}"
+
+        else:
+            raise RuntimeError(f"Unknown statement: {statement}")
+
+        return res
+
+    @classmethod
+    def _generate_switch(cls, mapping, statement, symbol):
+        header = f'case ({cls._parse_rhs(statement.test)})'
+
+        # TODO: Change switch with 0/1 to if
+
+        body = ''
+        for case, statements in statement.cases.items():
+            if isinstance(case, str):
+                case = int(case)    # TODO: Check correct conversion
+
+            if case is not None and not isinstance(case, int):
+                raise RuntimeError(f"Unknown case for switch: {case}")
+
+            if case is None:
+                case = 'default'
+            else:
+                case = f"{len(statement.test)}'d{case}"
+
+            body += f'    {case}:\n'
+
+            if statements:
+                case_body = cls._generate_statements(mapping, statements, symbol=symbol)
+            else:
+                case_body = '/* empty */;\n'
+
+            body += indent(case_body, ' '*8)
+
+        footer = 'endcase'
+
+        return dedent(f'{header}\n{body[:-1]}\n{footer}\n')
+
+    @classmethod
+    def _parse_rhs(cls, rhs):
+        if isinstance(rhs, ast.Const):
+            rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
+        elif isinstance(rhs, ast.Signal):
+            rhs = rhs.name
+        elif isinstance(rhs, ast.Cat):
+            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts)} }}"
+        elif isinstance(rhs, ast.Slice):
+            if rhs.stop == rhs.start + 1:
+                idx = rhs.start
+            else:
+                idx = f'{rhs.stop-1}:{rhs.start}'
+            rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
+        elif isinstance(rhs, ast.Operator):
+            pass    # TODO: Generate operators
+        elif isinstance(rhs, ast.Part):
+            rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'   # TODO: Check mask or guarantee size using intermediate signal
+        elif isinstance(rhs, Memory):
+            rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.r_index)}]'
+        else:
+            raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
+
+        return rhs
 
 class Signal:
     def __init__(self, signal, domain = None):
         self.signal = signal
         self.domain = domain
         self.statements = []
+
+        self.reset_statement = None
+
+        if domain is None:
+            self.reset_statement = Assign(ast.Const(0, len(signal)))
 
     @staticmethod
     def sanitize(name):
@@ -60,6 +326,15 @@ class Signal:
             statement = [statement]
         self.statements.extend(statement)
 
+    @property
+    def static(self):
+        # TODO: This can be used to treat comb-only signals without "if" as assigns
+
+        if self.domain is None and len(self.statements) <= 1 and all(isinstance(st, Assign) for st in self.statements):
+            return True
+
+        return False
+
 class Port(Signal):
     def __init__(self, signal, direction, domain=None):
         super().__init__(signal, domain)
@@ -68,6 +343,7 @@ class Port(Signal):
 class Memory(Signal):
     def __init__(self, signal, domain = None):
         super().__init__(signal, domain=domain)
+        self.r_index = self.w_index = None
 
 class Statement:
     pass
@@ -81,7 +357,14 @@ class Assign(Statement):
 class Switch(Statement):
     def __init__(self, test, cases):
         self.test  = test
-        self.cases = cases
+        self.cases = {
+            self.convert_case(case): statements for case, statements in cases.items()
+        }
+
+        # Move default to last place
+        default = self.cases.pop(None, None)
+        if default is not None:
+            self.cases[None] = default
 
     @staticmethod
     def convert_case(case):
@@ -108,7 +391,11 @@ class Module:
 
         self.submodules = {}
         self._signals = ast.SignalDict()
-        self.memories = []
+        self.ports = []
+
+    @property
+    def domains(self):
+        return self.fragment.domains
 
     def _change_case(self, name):
         return name if self.case_sensitive else name.lower()
@@ -126,6 +413,7 @@ class Module:
     def _reset(self):
         self._signals.clear()
         self.submodules.clear()
+        self.ports.clear()
 
     def _sanitize_signal(self, signal):
         names = [self._change_case(signal.name) for signal in self._signals]
@@ -172,9 +460,12 @@ class Module:
         self._prepare_submodules()
 
     def _prepare_signals(self):
+
+        # TODO: Possibly create intermediate signals so that ports are always wire
         for port, direction in self.fragment.ports.items():
             self._sanitize_signal(port)
             self._signals[port] = Port(port, direction=direction)
+            self.ports.append(self._signals[port])
 
         for domain, signal in self.fragment.iter_drivers():
             entry = self._signals.get(signal, None)
@@ -411,6 +702,9 @@ class Module:
             if signal not in self._signals:
                 self._sanitize_signal(signal)
                 self._signals[signal] = mapping
+            else:
+                for statement in mapping.statements:
+                    self._signals[signal].add_statement(statement)
 
         return submodule, None
 
@@ -501,9 +795,11 @@ class MemoryModule(Module):
             statements.pop(i)
 
     def _process_lhs_array(self, lhs, rhs, start_idx=None, stop_idx=None):
+        self._mem.w_index = lhs.index
         return [(self._mem.signal, Assign(rhs))]
 
     def _process_rhs_array(self, rhs):
+        self._mem.r_index = rhs.index
         return self._mem
 
 def v2vhdl(module, name='top', ports=None, blackboxes=None):
