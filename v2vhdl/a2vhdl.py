@@ -247,6 +247,8 @@ endmodule
 
         if isinstance(mapping, Signal):
             reset = None
+            dir = ''
+
             if isinstance(mapping, Memory):
                 type = 'reg'
             else:
@@ -257,7 +259,6 @@ endmodule
                     if mapping.domain is not None:
                         reset = cls._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
 
-                dir = ''
                 if isinstance(mapping, Port):
                     dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
                     dir += ' '
@@ -277,10 +278,11 @@ endmodule
 
     @staticmethod
     def _generate_one_signal(mapping, size=True):
-        if len(mapping.signal) <= 0:
-            raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
+        # TODO: Check what to do with zero-width signals
+        # if len(mapping.signal) <= 0:
+        #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
 
-        if not size or len(mapping.signal) == 1:
+        if not size or len(mapping.signal) <= 1:
             width = ''
         else:
             width = f'[{len(mapping.signal) - 1}:0] '
@@ -611,6 +613,10 @@ class Memory(Signal):
         self.r_index = self.w_index = None
         self.init = []
 
+    @property
+    def reset_statement(self):
+        return None
+
 class Statement:
     pass
 
@@ -624,7 +630,7 @@ class Switch(Statement):
     def __init__(self, test, cases):
         self.test  = test
         self.cases = {
-            self.convert_case(case): statements for case, statements in cases.items()
+            self.convert_case(test, case): statements for case, statements in cases.items()
         }
 
         # Move default to last place
@@ -633,10 +639,10 @@ class Switch(Statement):
             self.cases[None] = default
 
     @staticmethod
-    def convert_case(case):
+    def convert_case(test, case):
         if isinstance(case, tuple):
             if len(case) == 1:
-                case = Switch.convert_case(case[0])
+                case = Switch.convert_case(test, case[0])
             elif len(case) == 0:
                 case = None
             else:
@@ -645,7 +651,7 @@ class Switch(Statement):
             if '-' in case or '?' in case:
                 case = case.replace('-', '?')
         elif isinstance(case, int):
-            raise ValueError("Integer case needs length!")
+            case = Switch.convert_case(test, format(case, f'0{len(test)}b'))
 
         return case
 
@@ -712,6 +718,7 @@ class Module:
         return name if self.case_sensitive else name.lower()
 
     def _sanitize(self, name):
+        return name
 
         # TODO: Cache this for performance improvement
 
@@ -773,9 +780,16 @@ class Module:
         return new
 
     def _zero_size_signal(self):
-        self._new_signal(0, prefix = 'empty')
+        # TODO: Check
+        return ast.Const(0, 0)
+        return self._new_signal(0, prefix = 'empty')
 
     def _add_new_statement(self, left, statement):
+        ########################
+        if left not in self._signals:
+            self._sanitize_signal(left)
+            self._signals[left] = Signal(left)
+        ########################
         self._get_signal(left).add_statement(statement)
 
     def _add_new_assign(self, left, right, start_idx=None, stop_idx=None):
@@ -837,6 +851,7 @@ class Module:
             cases = {
                 i: [Assign(elem)] for i, elem in enumerate(rhs.elems)
             }
+
             # if 2**len(index) > len(rhs.elems):
             #     cases[None] = 0 # Default
 
@@ -1034,10 +1049,10 @@ class Module:
         self._execute_statements(self.fragment.statements)
 
     def _process_memory(self, submodule):
-        fragment = submodule.fragment
+        fragment = submodule._fragment
 
         m = MemoryModule(submodule.name, fragment, hdl=self.hdl, invalid_names=self.invalid_names)
-        m.prepare()
+        m._prepare(True)
 
         for signal, mapping in m._signals.items():
 
@@ -1055,12 +1070,13 @@ class Module:
     def _process_submodule_instance(self, submodule):
         ports = {}
 
-        subfragment = submodule.fragment
+        subfragment = submodule._fragment
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(submodule)
             submodule = None
         else:
+            submodule._prepare(True)
             for port_name, (port_value, kind) in subfragment.named_ports.items():
                 local_signal = None
                 if kind == 'io':
@@ -1073,7 +1089,6 @@ class Module:
                         self._execute_statements([new_port.eq(port_value)])
                     elif kind == 'o':
                         self._execute_statements([port_value.eq(new_port)])
-                        local_signal = self._signals[port_value]
                     else:
                         raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
@@ -1108,7 +1123,7 @@ class Module:
 class MemoryModule(Module):
     def __init__(self, name, fragment, hdl=None, invalid_names=None):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names)
-        self._mem = None
+        self._mem = self._elems = None
 
     def _prepare_signals(self):
         super()._prepare_signals()
@@ -1116,25 +1131,59 @@ class MemoryModule(Module):
         self._mem = None
 
         remove_signals = []
-        for signal, mapping in self._signals.items():
-            if not isinstance(mapping, Port):
-                if self._mem is None:
-                    self._mem = Memory(signal, domain = mapping.domain)
-                    signal.name = 'mem'
-                    self._sanitize_signal(signal)
-                else:
-                    remove_signals.append(signal)
 
-                self._mem.init.append(ast.Const(signal.reset, len(signal))) # TODO: Check if signals are in order
+        if not self._find_memory(self.fragment.statements):
+            raise RuntimeError(f"Failed to detect memory from Memory block {self.name}")
+
+        for signal, mapping in self._signals.items():
+            if signal in self._elems and signal is not self._mem.signal:
+                remove_signals.append(signal)
                 if self._mem.domain != mapping.domain:
                     raise RuntimeError(f"Conflicting domains for memory {self.name}")
-
-        self._signals[self._mem.signal] = self._mem
 
         for signal in remove_signals:
             self._signals.pop(signal)
 
         self._clean_statements(self.fragment.statements, remove_signals)
+
+    def _find_memory(self, statements):
+        for st in statements:
+            if isinstance(st, ast.Assign):
+                arr = None
+                if isinstance(st.lhs, ast.ArrayProxy):
+                    arr = st.lhs
+                elif isinstance(st.rhs, ast.ArrayProxy):
+                    arr = st.rhs
+
+                if arr is not None:
+                    if not arr.elems:
+                        raise RuntimeError(f"Zero-depth memory {self.name} not allowed!")
+
+                    signal = arr.elems[0]
+                    signal.name = 'mem'
+                    self._sanitize_signal(signal)
+
+                    mapping = self._signals.get(signal, None)
+                    if mapping is None:
+                        domain = None   # Memory is read-only, so we don't care
+                    else:
+                        domain = mapping.domain
+
+                    self._mem = Memory(signal, domain = domain)
+                    self._elems = ast.SignalSet(arr.elems)
+                    self._signals[signal] = self._mem
+
+                    for elem in self._elems:
+                        self._mem.init.append(ast.Const(elem.reset, len(elem)))
+
+                    return True
+
+            elif isinstance(st, ast.Switch):
+                for stmts in st.cases.values():
+                    if self._find_memory(stmts):
+                        return True
+
+        return False
 
     def _clean_statements(self, statements, remove_signals):
         remove_statements = []
