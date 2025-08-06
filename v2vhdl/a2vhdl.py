@@ -881,15 +881,18 @@ class Module:
             if isinstance(lhs.offset, ast.Const):
                 raise RuntimeError("Part with const offset is Slice!")
             else:
+                if lhs.stride != 1:
+                    raise NotImplementedError("Only stride=1 supported for Parts")
+
                 case = 0
                 cases = {}
 
                 while True:
-                    offset = case * lhs.stride
+                    offset = case * lhs.width
                     if offset >= len(lhs):
                         break
 
-                    part = lhs.value[offset : offset + lhs.stride]
+                    part = lhs.value[offset : offset + lhs.width]
                     cases[case] = self._process_lhs(part, rhs, start_idx, stop_idx)
                     case += 1
 
@@ -961,7 +964,10 @@ class Module:
             if isinstance(rhs.offset, ast.Const):
                 raise RuntimeError("Part with const offset is Slice!")
             else:
-                new_rhs = self._new_signal(rhs.stride, prefix='part')
+                if rhs.stride != 1:
+                    raise NotImplementedError("Only stride=1 supported for Parts")
+
+                new_rhs = self._new_signal(rhs.width, prefix='part')
                 rhs.value = self._process_rhs(rhs.value)
                 rhs.offset = self._process_rhs(rhs.offset)
 
