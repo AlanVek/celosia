@@ -173,14 +173,6 @@ endmodule
         for old, new in replace_map.items():
             name = name.replace(old, new)
 
-        while '__' in name:
-            name = name.replace('__', '_')
-
-        if name and name[0] == '_':
-            name = name[1:]
-        if name and name[-1] == '_':
-            name = name[:-1]
-
         while name in cls.protected:
             name = 'esc_' + name
 
@@ -742,8 +734,9 @@ class Module:
 
         if curr_num:
             idx = int(curr_num) + 1
-            name = f'{name[:curr_idx+1]}{idx}'
-            idx += 1
+            if self._change_case(name) in invalid:
+                name = f'{name[:curr_idx+1]}{idx}'
+                idx += 1
         else:
             idx = 0
 
@@ -1125,7 +1118,10 @@ class Module:
                 ports = None
                 for port in submodule.ports:
                     local_signal = self._signals.get(port.signal, None)
-                    if port.direction in ['o', 'io'] and local_signal is not None:
+                    if local_signal is None:
+                        local_signal = self._signals[port.signal] = Signal(port.signal)
+
+                    if port.direction in ['o', 'io']:
                         local_signal.disable_reset_statement()
 
             # TODO: Maybe rename submodule ports as <submodule.name>__<port_name>
