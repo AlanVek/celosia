@@ -89,6 +89,7 @@ class VHDL(HDL):
             ')': '_',
             '{': '_',
             '}': '_',
+            '-': '_',
         }
 
         for old, new in replace_map.items():
@@ -169,6 +170,7 @@ endmodule
             ')': '_',
             '{': '_',
             '}': '_',
+            '-': '_',
         }
 
         for old, new in replace_map.items():
@@ -189,8 +191,6 @@ endmodule
 
         port_block, initial_block, assignment_block, blocks_block = cls._parse_signals(module)
         submodules_block = cls._generate_submodule_blocks(module)
-
-        # TODO: Guarantee no collisions with Instance names
 
         res = cls.template.format(
             name = module.name,
@@ -306,10 +306,12 @@ endmodule
         # TODO: Validate rhs size == lhs size or take slice
         repr = mapping.signal.name
 
+        size = len(mapping.signal)
         if isinstance(mapping, Memory):
             repr = f'{repr}[{cls._parse_rhs(mapping.w_index)}]'
         elif start_idx is not None and stop_idx is not None:
             if start_idx != 0 or stop_idx != len(mapping.signal):
+                size = max(1, stop_idx - start_idx + 1)
                 if stop_idx == start_idx + 1:
                     repr = f'{repr}[{start_idx}]'
                 else:
@@ -317,7 +319,25 @@ endmodule
         elif start_idx is not None or stop_idx is not None:
             raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
 
-        return f'{repr} {symbol} {cls._parse_rhs(statement.rhs)}'
+        return f'{repr} {symbol} {cls._parse_rhs(cls._fix_rhs_size(statement.rhs, size))}'
+
+    @classmethod
+    def _fix_rhs_size(cls, rhs, size):
+        # TODO: Improve
+
+        if isinstance(rhs, ast.Const):
+            if rhs.width < size:
+                rhs = ast.Const(rhs.value, size)
+            else:
+                rhs = ast.Const(rhs.value & int('1' * size, 2), size)
+
+        elif isinstance(rhs, (ast.Signal, ast.Cat)):
+            if len(rhs) < size:
+                rhs = ast.Cat(rhs, ast.Const(0, size - len(rhs)))
+            else:
+                rhs = rhs[:size]
+
+        return rhs
 
     @classmethod
     def _generate_one_block(cls, mapping, module):
@@ -560,12 +580,8 @@ class Signal:
         self._no_reset_statement = True
 
     @property
-    def reset_statement(self):
-        if self.domain is not None or self._no_reset_statement:
-            return None
-
+    def assigned_bits(self):
         assigned_bits = [False] * len(self.signal)
-
         for statement in self.statements:
             if isinstance(statement, Assign):
                 start_idx = statement._start_idx
@@ -581,10 +597,18 @@ class Signal:
                         pass    # TODO: Possible Verilog error?
                     assigned_bits[bit] = True
 
+        return assigned_bits
+
+    @property
+    def reset_statement(self):
+        if self.domain is not None or self._no_reset_statement:
+            return None
+
+        assigned_bits = self.assigned_bits
         if all(assigned_bits):
             return None
 
-        return Assign(ast.Const(0, len(self.signal)))
+        return Assign(ast.Const(self.signal.reset, len(self.signal)))
 
     @staticmethod
     def sanitize(name, hdl=None):
@@ -601,8 +625,13 @@ class Signal:
     def static(self):
         # TODO: This can be used to treat comb-only signals without "if" as assigns
 
-        if self.domain is None and len(self.statements) <= 1 and all(isinstance(st, Assign) for st in self.statements):
-            return True
+        if self.domain is None:
+            if self.statements:
+                if len(self.statements) <= 1 and all(isinstance(st, Assign) for st in self.statements):
+                    if all(self.assigned_bits):
+                        return True
+            else:
+                return True
 
         return False
 
@@ -690,6 +719,9 @@ class Switch(Statement):
         return None
 
 class Module:
+
+    allow_remapping = False
+
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         if invalid_names is None:
             invalid_names = []
@@ -709,6 +741,7 @@ class Module:
         self.submodules = []
         self._signals = ast.SignalDict()
         self.ports = []
+        self._remapped = ast.SignalDict()
 
         self.invalid_names.append(self._change_case(name))
 
@@ -784,6 +817,7 @@ class Module:
         self._signals.clear()
         self.submodules.clear()
         self.ports.clear()
+        self._remapped.clear()
         if self.top:
             self.invalid_names.clear()
 
@@ -821,6 +855,9 @@ class Module:
             # self._sanitize_signal(left)
             self._signals[left] = Signal(left)
         ########################
+        remap = self._remapped.get(left, None)
+        if remap is not None:
+            left = remap
         self._get_signal(left).add_statement(statement)
 
     def _add_new_assign(self, left, right, start_idx=None, stop_idx=None):
@@ -850,6 +887,12 @@ class Module:
             if entry is None:
                 # self._sanitize_signal(signal)
                 entry = self._signals[signal] = Signal(signal)
+
+            if self.allow_remapping and domain is not None:
+                remap = self._remapped[signal] = self._new_signal(len(signal), prefix = f'{signal.name}_next')
+                entry.add_statement(Assign(remap))
+                self._signals[remap].add_statement(Assign(signal)) # TODO: Avoid duplicates
+
             entry.domain = domain
 
     def _process_lhs(self, lhs, rhs, start_idx=None, stop_idx=None):
@@ -1162,6 +1205,9 @@ class Module:
                 self.submodules.append((submodule, ports))
 
 class MemoryModule(Module):
+
+    allow_remapping = False
+
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
         self.invalid_names.pop()
