@@ -1082,14 +1082,21 @@ class Module:
                     ports[port_name] = port_value   # TODO: Check how to handle!
                     local_signal = self._signals.get(port_value, None)
                 else:
-                    new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
-                    ports[port_name] = new_port
-                    if kind == 'i':
-                        self._execute_statements([new_port.eq(port_value)])
-                    elif kind == 'o':
-                        self._execute_statements([port_value.eq(new_port)])
+                    # Special case for ports tied to constants/signals -- We can reduce some logic
+                    if kind == 'i' and (
+                        isinstance(port_value, ast.Const) or
+                        (isinstance(port_value, ast.Signal) and port_value in self._signals)
+                    ):
+                        ports[port_name] = port_value
                     else:
-                        raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
+                        new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
+                        ports[port_name] = new_port
+                        if kind == 'i':
+                            self._execute_statements([new_port.eq(port_value)])
+                        elif kind == 'o':
+                            self._execute_statements([port_value.eq(new_port)])
+                        else:
+                            raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
                 if local_signal is not None:
                     local_signal.disable_reset_statement()
@@ -1220,7 +1227,7 @@ class MemoryModule(Module):
             if isinstance(st, ast.Assign):
                 arr = None
                 if isinstance(st.lhs, ast.ArrayProxy):
-                    
+
                     if not self._has_write:
                         raise RuntimeError(f"Read-only memory {self.name} at left hand side is invalid!")
 
