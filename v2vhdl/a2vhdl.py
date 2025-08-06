@@ -190,15 +190,12 @@ endmodule
         return name
 
     @classmethod
-    def _convert_module(cls, module, curr_types = None):
-        if curr_types is None:
-            curr_types = []
-
+    def _convert_module(cls, module):
         if module.empty:
             return ''
 
         port_block, initial_block, assignment_block, blocks_block = cls._parse_signals(module)
-        submodules_block = cls._generate_submodule_blocks(module, curr_types)
+        submodules_block = cls._generate_submodule_blocks(module)
 
         # TODO: Guarantee no collisions with Instance names
 
@@ -210,10 +207,10 @@ endmodule
             submodules_block = submodules_block,
             blocks_block = blocks_block,
         )
-        for submodule, ports in module.submodules.values():
+        for submodule, ports in module.submodules:
             if ports is not None:   # Instance
                 continue
-            res += '\n' + cls._convert_module(submodule, curr_types)
+            res += '\n' + cls._convert_module(submodule)
 
         return res
 
@@ -425,14 +422,14 @@ endmodule
         return dedent(f'{header}\n{body[:-1]}\n{footer}\n')
 
     @classmethod
-    def _generate_submodule_blocks(cls, module, curr_types):
+    def _generate_submodule_blocks(cls, module):
         res = ''
 
-        for name, (submodule, ports) in module.submodules.items():
+        for submodule, ports in module.submodules:
             params = {}
             if ports is None:
                 if isinstance(submodule.fragment, ir.Instance):
-                    raise RuntimeError(f"Found invalid submodule configuration for submodule {name} of module {module.name}")
+                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
 
                 if submodule.empty:
                     continue
@@ -443,21 +440,14 @@ endmodule
                     #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
                     ports[port.signal.name] = port.signal
 
-                type = name
-                idx = 0
-                _curr_types = list(map(module._change_case, curr_types))
-                while module._change_case(type) in _curr_types:
-                    type = f'{type}{idx}'
-                    idx += 1
-
+                type = submodule.name
             else:
                 if not isinstance(submodule.fragment, ir.Instance):
-                    raise RuntimeError(f"Found invalid submodule configuration for submodule {name} of module {module.name}")
+                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
 
                 params.update(submodule.fragment.parameters)
                 type = submodule.fragment.type
 
-            curr_types.append(type)
             res += f'{type}'
 
             if params:
@@ -466,7 +456,7 @@ endmodule
                     res += f'    .{key}({value}),\n'   # TODO: Check types
                 res = res[:-2] + '\n)'
 
-            res += f' {name} (\n'
+            res += f' {submodule.name} (\n'
             for key, value in ports.items():
                 res += f'    .{key}({cls._parse_rhs(value)}),\n'
 
@@ -674,13 +664,19 @@ class Switch(Statement):
         return None
 
 class Module:
-    def __init__(self, name, fragment, hdl=None):
+    def __init__(self, name, fragment, hdl=None, invalid_names=None):
+        if invalid_names is None:
+            invalid_names = []
+
+        invalid_names.append(name)
+
+        self.invalid_names = invalid_names
         self.name = name
         self._fragment = fragment
         self.fragment = None
         self.hdl = hdl
 
-        self.submodules = {}
+        self.submodules = []
         self._signals = ast.SignalDict()
         self.ports = []
 
@@ -712,18 +708,27 @@ class Module:
     def _change_case(self, name):
         return name if self.case_sensitive else name.lower()
 
-    def sanitize_module(self, name):
-        names = [self._change_case(signal.name) for signal in self._signals]
-        names.extend(self._change_case(submodule.name) for submodule, _ in self.submodules.values())
+    def _sanitize(self, name):
+        invalid = [self.name]
+        invalid.extend(self._change_case(signal.name) for signal in self._signals)
+        invalid.extend(self._change_case(submodule.name) for submodule, _ in self.submodules)
+        invalid.extend(self.invalid_names)
 
-        if self.hdl is not None:
-            name = self.hdl.sanitize(name)
-
+        idx = 0
         _name = name
-        while self._change_case(name) in names:
+        while self._change_case(name) in invalid:
             name = f'{_name}{idx}'
             idx += 1
+
         return name
+
+    def sanitize_module(self, name):
+        if self.hdl is not None:
+            name = self.hdl.sanitize(name)
+        return self._sanitize(name)
+
+    def _sanitize_signal(self, signal):
+        signal.name = self._sanitize(Signal.sanitize(signal.name, hdl=self.hdl))
 
     def _reset(self, submodule=False):
         if submodule:
@@ -731,17 +736,6 @@ class Module:
         self._signals.clear()
         self.submodules.clear()
         self.ports.clear()
-
-    def _sanitize_signal(self, signal):
-        names = [self._change_case(signal.name) for signal in self._signals]
-
-        idx = 0
-        name = _name = Signal.sanitize(signal.name, hdl=self.hdl)
-        while self._change_case(name) in names:
-            name = f'{_name}{idx}'
-            idx += 1
-
-        signal.name = name
 
     def _get_signal(self, signal):
         s = self._signals.get(signal, None)
@@ -1016,7 +1010,7 @@ class Module:
     def _process_memory(self, submodule):
         fragment = submodule.fragment
 
-        m = MemoryModule(submodule.name, fragment, hdl=self.hdl)
+        m = MemoryModule(submodule.name, fragment, hdl=self.hdl, invalid_names=self.invalid_names)
         m.prepare()
 
         for signal, mapping in m._signals.items():
@@ -1068,8 +1062,7 @@ class Module:
                 subname = 'unnamed'
 
             name = self.sanitize_module(subname)
-
-            submodule = Module(name, subfragment, hdl=self.hdl)
+            submodule = Module(name, subfragment, hdl=self.hdl, invalid_names=self.invalid_names)
 
             if isinstance(subfragment, ir.Instance):
                 submodule, ports = self._process_submodule_instance(submodule)
@@ -1082,11 +1075,11 @@ class Module:
                         local_signal.disable_reset_statement()
 
             if submodule is not None:
-                self.submodules[name] = (submodule, ports)
+                self.submodules.append((submodule, ports))
 
 class MemoryModule(Module):
-    def __init__(self, name, fragment, hdl=None):
-        super().__init__(name, fragment, hdl=hdl)
+    def __init__(self, name, fragment, hdl=None, invalid_names=None):
+        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names)
         self._mem = None
 
     def _prepare_signals(self):
@@ -1145,34 +1138,3 @@ class MemoryModule(Module):
     def _process_rhs_array(self, rhs):
         self._mem.r_index = rhs.index
         return self._mem
-
-def v2vhdl(module, name='top', ports=None, blackboxes=None):
-    m = Module(name, module, case_sensitive=True)
-
-def main():
-    import os
-    # with open('test.v', 'r') as f: # with open('test.v', 'r') as f:
-    # with open('test2.v', 'r') as f: # with open('test.v', 'r') as f:
-    with open(os.path.expanduser('~/Downloads/NOVO/novospace/repos/novohdl/build/top.v'), 'r') as f:
-        content = f.read()
-
-    blackboxes = {
-        'submodule_type': {
-            'p_test0': ('integer', 0),
-            'p_test1': ('integer', 2),
-            'i_input0': 4,
-            'i_input1': 3,
-            'o_output0': 8,
-        }
-    }
-
-    res = v2vhdl(content, blackboxes)
-
-    os.makedirs('testdir', exist_ok=True)
-
-    for key, value in res.items():
-        with open(os.path.join('testdir', key), 'w') as f:
-            f.write(value)
-
-if __name__ == '__main__':
-    main()
