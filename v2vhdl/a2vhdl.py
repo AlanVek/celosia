@@ -1091,6 +1091,8 @@ class Module:
 
         subfragment = submodule.fragment
 
+        self.invalid_names.append(subfragment.type)
+
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(submodule)
             submodule = None
@@ -1115,6 +1117,7 @@ class Module:
                             self._execute_statements([new_port.eq(port_value)])
                         elif kind == 'o':
                             self._execute_statements([port_value.eq(new_port)])
+                            local_signal = self._signals[new_port]
                         else:
                             raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
