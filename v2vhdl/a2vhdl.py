@@ -715,7 +715,7 @@ class Module:
 
         # TODO: Cache this for performance improvement
 
-        invalid = [self.name]
+        invalid = ['', self.name]
         invalid.extend(self._change_case(signal.name) for signal in self._signals)
         invalid.extend(self._change_case(submodule.name) for submodule, _ in self.submodules)
         invalid.extend(self.invalid_names)
@@ -729,8 +729,10 @@ class Module:
             curr_num = name[curr_idx] + curr_num
             curr_idx -= 1
 
-        if curr_idx:
-            idx = int(curr_idx)
+        if curr_num:
+            idx = int(curr_num) + 1
+            name = f'{name[:curr_idx+1]}{idx}'
+            idx += 1
         else:
             idx = 0
 
@@ -1097,6 +1099,8 @@ class Module:
                     local_signal = self._signals.get(port.signal, None)
                     if port.direction in ['o', 'io'] and local_signal is not None:
                         local_signal.disable_reset_statement()
+
+            # TODO: Maybe rename submodule ports as <submodule.name>__<port_name>
 
             if submodule is not None:
                 self.submodules.append((submodule, ports))
