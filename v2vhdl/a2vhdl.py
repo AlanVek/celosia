@@ -600,11 +600,11 @@ class Port(Signal):
         #     self.reset_statement = None
 
 class Memory(Signal):
-    def __init__(self, signal, domain = None, w_index=None, r_index=None):
+    def __init__(self, signal, domain = None, w_index=None, r_index=None, init = None):
         super().__init__(signal, domain=domain)
         self.w_index = w_index
         self.r_index = r_index
-        self.init = []
+        self.init = [] if init is None else init
 
     @property
     def reset_statement(self):
@@ -812,13 +812,6 @@ class Module:
 
         if self.top:
             self._cleanup_signal_names()
-
-
-        if isinstance(self, MemoryModule):
-            print('Statements:', self.fragment.statements)
-            for signal in self._signals:
-                print(signal, self._signals[signal].statements)
-
 
     def _prepare_signals(self):
 
@@ -1134,35 +1127,49 @@ class MemoryModule(Module):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
         self.invalid_names.pop()
 
-        self._mem = self._read_proxy = self._write_proxy = None
+        self._mem = self._read_proxy = None
 
-        has_rclk = fragment.parameters.get('RD_CLK_ENABLE', ast.Const(0, 1))
-        if has_rclk.value:
+        self._has_read = fragment.parameters.get('RD_CLK_ENABLE', ast.Const(0, 1)).value
+        if self._has_read:
             rclk = fragment.named_ports.get('RD_CLK', None)
             if rclk is None:
                 raise RuntimeError(f"Missing read clock for memory {self.name}")
-            self._rdom = self._find_domain_from_clock(self._process_rhs(rclk[0]))
-        else:
-            self._rdom = None
 
-        has_wclk = fragment.parameters.get('WR_CLK_ENABLE', ast.Const(0, 1))
-        if has_wclk.value:
+            if isinstance(rclk[0], ast.Const) and rclk[0].value == 0:
+                self._rdom = None
+            else:
+                self._rdom = self._find_domain_from_clock(self._process_rhs(rclk[0]))
+
+            rindex = fragment.named_ports.get('RD_ADDR', None)
+            if rindex is None:
+                raise RuntimeError(f"Failed to find read address for memory {self.name}")
+            self._rindex = self._process_rhs(rindex[0])
+
+            r_en = fragment.named_ports.get('RD_EN', None)
+            if r_en is None:
+                raise RuntimeError(f"Missing write enable for memory {self.name}")
+            self._r_en = self._process_rhs(r_en[0])
+        else:
+            self._rdom = self._rindex = None
+
+        self._has_write = fragment.parameters.get('WR_CLK_ENABLE', ast.Const(0, 1)).value
+        if self._has_write:
             wclk = fragment.named_ports.get('WR_CLK', None)
             if wclk is None:
                 raise RuntimeError(f"Missing read clock for memory {self.name}")
             self._wdom = self._find_domain_from_clock(self._process_rhs(wclk[0]))
+            windex = fragment.named_ports.get('WR_ADDR', None)
+            if windex is None:
+                raise RuntimeError(f"Failed to find write address for memory {self.name}")
+            self._windex = self._process_rhs(windex[0])
+
+            w_en = fragment.named_ports.get('WR_EN', None)
+            if w_en is None:
+                raise RuntimeError(f"Missing write enable for memory {self.name}")
+            self._w_en = self._process_rhs(w_en[0])
+
         else:
-            self._wdom = None
-
-        rindex = fragment.named_ports.get('RD_ADDR', None)
-        if rindex is None:
-            raise RuntimeError(f"Failed to find read address for memory {self.name}")
-        self._rindex = self._process_rhs(rindex[0])
-
-        windex = fragment.named_ports.get('WR_ADDR', None)
-        if windex is None:
-            raise RuntimeError(f"Failed to find write address for memory {self.name}")
-        self._windex = self._process_rhs(windex[0])
+            self._wdom = self._windex = None
 
         self._width = fragment.parameters.get('WIDTH', None)
         if self._width is None:
@@ -1171,6 +1178,11 @@ class MemoryModule(Module):
         self._size = fragment.parameters.get('SIZE', None)
         if self._size is None:
             raise RuntimeError(f"Failed to find size for memory {self.name}")
+
+        init = fragment.parameters.get('INIT', ast.Const(0, self._width * self._size)).value
+        self._init = [
+            ast.Const((init >> (self._width * i)) & int('1' * self._width, 2), self._width) for i in range(self._size)
+        ]
 
     def _find_domain_from_clock(self, clock):
         for domain in self.domains.values():
@@ -1181,10 +1193,7 @@ class MemoryModule(Module):
     def _prepare_signals(self):
         super()._prepare_signals()
 
-        # TODO: What about read-only?
-
-        self._read_proxy = self._new_signal(width = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
-        self._write_proxy = self._new_signal(width = self._width, prefix = f'{self.name}_wdata')
+        # TODO: Handle multi-port and granularity!!!
 
         self._mem = self._signals[self._new_signal(
             width   = self._width,
@@ -1192,42 +1201,64 @@ class MemoryModule(Module):
             mapping = Memory,
             domain  = self._wdom.name,
             w_index = self._windex,
-            r_index = self._rindex
+            r_index = self._rindex,
+            init    = self._init,
         )]
 
-        for _ in range(self._size):
-            self._mem.init.append(ast.Const(0, 1))
+        if self._has_read:
+            self._read_proxy = self._new_signal(width = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
+            self._add_new_statement(self._read_proxy, Assign(self._mem))
 
-        self._add_new_statement(self._read_proxy, Assign(self._mem))
-        self._add_new_statement(self._mem.signal, Assign(self._write_proxy))
+        self._update_statements(self.fragment.statements)
 
-        self._find_initials_and_clean_statements(self.fragment.statements)
+    def _update_statements(self, statements, rst_cond = False, elems = None):
+        replace_statements = []
+        if elems is None:
+            elems = ast.SignalSet()
 
-    def _find_initials_and_clean_statements(self, statements):
-        remove_statements = []
         for i, st in enumerate(statements):
             if isinstance(st, ast.Assign):
-                elems = None
+                arr = None
                 if isinstance(st.lhs, ast.ArrayProxy):
-                    elems = st.lhs.elems
-                    st.lhs = self._write_proxy
+                    
+                    if not self._has_write:
+                        raise RuntimeError(f"Read-only memory {self.name} at left hand side is invalid!")
+
+                    arr = st.lhs
+                    st.lhs = self._mem.signal
+                    if rst_cond:
+                        replace_statements.append((i, None))
                 elif isinstance(st.rhs, ast.ArrayProxy):
-                    elems = st.rhs.elems
+                    if not self._has_read:
+                        raise RuntimeError(f"Write-only memory {self.name} at right hand side is invalid!")
+
+                    arr = st.rhs
                     st.rhs = self._read_proxy
 
-                if elems is not None:
-                    if len(elems) != self._size:
-                        raise RuntimeError(f"Mismatch in array size for memory {self.name}")
-
-                    for i, elem in enumerate(elems):
-                        self._mem.init[i] = ast.Const(elem.reset, len(elem))
+                if arr is not None:
+                    for elem in arr.elems:
+                        elems.add(elem)
                         self._signals.pop(elem, None)
 
-            elif isinstance(st, ast.Switch):
-                if st.test is self._wdom.rst:
-                    remove_statements.append(i)
-                for stmts in st.cases.values():
-                    self._find_initials_and_clean_statements(stmts)
+                for s in [st.lhs, st.rhs]:
+                    if isinstance(s, ast.Signal) and s in elems:
+                        replace_statements.append((i, None))
+                        break
 
-        for i in reversed(remove_statements):
-            statements.pop(i)
+            elif isinstance(st, ast.Switch):
+                if st.test is self._r_en:
+                    assert [('1',)] == list(st.cases), f"Invalid memory statement for module {self.name}"
+                    new_list = st.cases[('1',)]
+                    self._update_statements(new_list, elems=elems)
+                    replace_statements.append((i, ast._StatementList(new_list)))
+                else:
+                    rst_cond = (self._rdom is not None and st.test is self._rdom.rst) or (self._wdom is not None and st.test is self._wdom.rst)
+                    for stmts in st.cases.values():
+                        self._update_statements(stmts, rst_cond=rst_cond, elems=elems)
+
+        for i, new in reversed(replace_statements):
+            if new is None:
+                statements.pop(i)
+            else:
+                statements[i] = new
+
