@@ -478,19 +478,22 @@ endmodule
         elif isinstance(rhs, ast.Cat):
             rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1])} }}"
         elif isinstance(rhs, ast.Slice):
-            if rhs.stop == rhs.start + 1:
-                idx = rhs.start
+            if rhs.start == 0 and rhs.stop >= len(rhs.value):
+                rhs = cls._parse_rhs(rhs.value)
             else:
-                idx = f'{rhs.stop-1}:{rhs.start}'
+                if rhs.stop == rhs.start + 1:
+                    idx = rhs.start
+                else:
+                    idx = f'{rhs.stop-1}:{rhs.start}'
 
-            if isinstance(rhs.value, ast.Const):
-                value = rhs.value.value
-                if value < 0:
-                    value += 2**rhs.value.width
-                value = format(value, f'0{rhs.value.width}b')[::-1][rhs.start:rhs.stop][::-1]
-                rhs = cls._parse_rhs(ast.Const(int(value, 2), len(value)))
-            else:
-                rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
+                if isinstance(rhs.value, ast.Const):
+                    value = rhs.value.value
+                    if value < 0:
+                        value += 2**rhs.value.width
+                    value = format(value, f'0{rhs.value.width}b')[::-1][rhs.start:rhs.stop][::-1]
+                    rhs = cls._parse_rhs(ast.Const(int(value, 2), len(value)))
+                else:
+                    rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
 
         elif isinstance(rhs, ast.Operator):
             parsed = list(map(cls._parse_rhs, rhs.operands))
@@ -709,12 +712,28 @@ class Module:
         return name if self.case_sensitive else name.lower()
 
     def _sanitize(self, name):
+
+        # TODO: Cache this for performance improvement
+
         invalid = [self.name]
         invalid.extend(self._change_case(signal.name) for signal in self._signals)
         invalid.extend(self._change_case(submodule.name) for submodule, _ in self.submodules)
         invalid.extend(self.invalid_names)
 
-        idx = 0
+        if not name:
+            name = 'unnamed'
+
+        curr_num = ''
+        curr_idx = len(name) - 1
+        while curr_idx >= 0 and name[curr_idx].isnumeric():
+            curr_num = name[curr_idx] + curr_num
+            curr_idx -= 1
+
+        if curr_idx:
+            idx = int(curr_idx)
+        else:
+            idx = 0
+
         _name = name
         while self._change_case(name) in invalid:
             name = f'{_name}{idx}'
@@ -860,7 +879,12 @@ class Module:
                     if offset >= len(rhs):
                         break
 
-                    res.extend(self._process_lhs(part, rhs[offset : offset + len(part)], new_start, new_stop))
+                    if offset == 0 and len(part) >= len(rhs):
+                        new_rhs = rhs
+                    else:
+                        new_rhs = rhs[offset : offset + len(part)]
+
+                    res.extend(self._process_lhs(part, new_rhs, new_start, new_stop))
                     offset += len(part)
 
         elif isinstance(lhs, ast.Slice):
