@@ -673,21 +673,27 @@ class Switch(Statement):
         return None
 
 class Module:
-    def __init__(self, name, fragment, hdl=None, invalid_names=None):
+    def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         if invalid_names is None:
             invalid_names = []
 
-        invalid_names.append(name)
-
         self.invalid_names = invalid_names
+        self.top = top
+
         self.name = name
         self._fragment = fragment
-        self.fragment = None
+        if top:
+            self.fragment = None
+        else:
+            self.fragment = fragment
+
         self.hdl = hdl
 
         self.submodules = []
         self._signals = ast.SignalDict()
         self.ports = []
+
+        self.invalid_names.append(self._change_case(name))
 
     @property
     def empty(self):
@@ -717,15 +723,13 @@ class Module:
     def _change_case(self, name):
         return name if self.case_sensitive else name.lower()
 
-    def _sanitize(self, name):
-        return name
-
-        # TODO: Cache this for performance improvement
-
-        invalid = ['', self.name]
-        invalid.extend(self._change_case(signal.name) for signal in self._signals)
-        invalid.extend(self._change_case(submodule.name) for submodule, _ in self.submodules)
-        invalid.extend(self.invalid_names)
+    def _sanitize(self, name, extra=None):
+        invalid = set(['', self.name])
+        invalid.update(self._change_case(submodule.name) for submodule, _ in self.submodules)
+        # invalid.update(self._change_case(signal.name) for signal in self._signals)
+        invalid.update(self.invalid_names)
+        if extra is not None:
+            invalid.update(extra)
 
         if not name:
             name = 'unnamed'
@@ -750,20 +754,29 @@ class Module:
 
         return name
 
-    def sanitize_module(self, name):
+    def sanitize_module(self, name, extra=None):
         if self.hdl is not None:
             name = self.hdl.sanitize(name)
-        return self._sanitize(name)
+        return self._sanitize(name, extra=extra)
 
-    def _sanitize_signal(self, signal):
-        signal.name = self._sanitize(Signal.sanitize(signal.name, hdl=self.hdl))
+    def _sanitize_signal(self, signal, extra=None):
+        signal.name = self._sanitize(Signal.sanitize(signal.name, hdl=self.hdl), extra=extra)
 
-    def _reset(self, submodule=False):
-        if submodule:
-            self.fragment = self._fragment
+    def _reset(self):
         self._signals.clear()
         self.submodules.clear()
         self.ports.clear()
+        if self.top:
+            self.invalid_names.clear()
+
+    def _cleanup_signal_names(self):
+        extra = []
+        for signal in self._signals:
+            self._sanitize_signal(signal, extra=extra)
+            extra.append(self._change_case(signal.name))
+
+        for submodule, _ in self.submodules:
+            submodule._cleanup_signal_names()
 
     def _get_signal(self, signal):
         s = self._signals.get(signal, None)
@@ -774,7 +787,7 @@ class Module:
     def _new_signal(self, width=1, prefix=None):
         name = prefix or 'tmp'
         new = ast.Signal(width, name=name)
-        self._sanitize_signal(new)
+        # self._sanitize_signal(new)
         self._signals[new] = Signal(new)
 
         return new
@@ -787,7 +800,7 @@ class Module:
     def _add_new_statement(self, left, statement):
         ########################
         if left not in self._signals:
-            self._sanitize_signal(left)
+            # self._sanitize_signal(left)
             self._signals[left] = Signal(left)
         ########################
         self._get_signal(left).add_statement(statement)
@@ -795,29 +808,29 @@ class Module:
     def _add_new_assign(self, left, right, start_idx=None, stop_idx=None):
         self._add_new_statement(left, Assign(right, start_idx, stop_idx))
 
-    def _prepare(self, submodule=False):
-        self._reset(submodule)
+    def prepare(self, ports=None, platform=None):
+        if self.top:
+            self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
 
         self._prepare_signals()
         self._prepare_statements()
         self._prepare_submodules()
 
-    def prepare(self, ports=None, platform=None):
-        self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
-        self._prepare(False)
+        if self.top:
+            self._cleanup_signal_names()
 
     def _prepare_signals(self):
 
         # TODO: Possibly create intermediate signals so that ports are always wire
         for port, direction in self.fragment.ports.items():
-            self._sanitize_signal(port)
+            # self._sanitize_signal(port)
             self._signals[port] = Port(port, direction=direction)
             self.ports.append(self._signals[port])
 
         for domain, signal in self.fragment.iter_drivers():
             entry = self._signals.get(signal, None)
             if entry is None:
-                self._sanitize_signal(signal)
+                # self._sanitize_signal(signal)
                 entry = self._signals[signal] = Signal(signal)
             entry.domain = domain
 
@@ -941,7 +954,7 @@ class Module:
         elif isinstance(rhs, ast.Signal):
             # Fix: Can happen with submodule ports
             if rhs not in self._signals:
-                self._sanitize_signal(rhs)
+                # self._sanitize_signal(rhs)
                 self._signals[rhs] = Signal(rhs)
         elif isinstance(rhs, ast.Cat):
             if len(rhs.parts) == 0:
@@ -1049,20 +1062,20 @@ class Module:
         self._execute_statements(self.fragment.statements)
 
     def _process_memory(self, submodule):
-        fragment = submodule._fragment
+        fragment = submodule.fragment
 
-        m = MemoryModule(submodule.name, fragment, hdl=self.hdl, invalid_names=self.invalid_names)
-        m._prepare(True)
+        m = MemoryModule(submodule.name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False)
+        m.prepare()
 
         for signal, mapping in m._signals.items():
 
             # TODO: Make it so that the memory is read only once using Amaranth's __0__
             if mapping is m._mem:
-                self._sanitize_signal(signal)
+                # self._sanitize_signal(signal)
                 self._signals[signal] = mapping
             else:
                 if signal not in self._signals:
-                    self._sanitize_signal(signal)
+                    # self._sanitize_signal(signal)
                     self._signals[signal] = Signal(mapping.signal, mapping.domain)
                 for statement in mapping.statements:
                     self._signals[signal].add_statement(statement)
@@ -1070,13 +1083,13 @@ class Module:
     def _process_submodule_instance(self, submodule):
         ports = {}
 
-        subfragment = submodule._fragment
+        subfragment = submodule.fragment
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(submodule)
             submodule = None
         else:
-            submodule._prepare(True)
+            submodule.prepare()
             for port_name, (port_value, kind) in subfragment.named_ports.items():
                 local_signal = None
                 if kind == 'io':
@@ -1103,12 +1116,12 @@ class Module:
                 subname = 'unnamed'
 
             name = self.sanitize_module(subname)
-            submodule = Module(name, subfragment, hdl=self.hdl, invalid_names=self.invalid_names)
+            submodule = Module(name, subfragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False)
 
             if isinstance(subfragment, ir.Instance):
                 submodule, ports = self._process_submodule_instance(submodule)
             else:
-                submodule._prepare(True)
+                submodule.prepare()
                 ports = None
                 for port in submodule.ports:
                     local_signal = self._signals.get(port.signal, None)
@@ -1121,8 +1134,8 @@ class Module:
                 self.submodules.append((submodule, ports))
 
 class MemoryModule(Module):
-    def __init__(self, name, fragment, hdl=None, invalid_names=None):
-        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names)
+    def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
+        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
         self._mem = self._elems = None
 
     def _prepare_signals(self):
@@ -1161,7 +1174,7 @@ class MemoryModule(Module):
 
                     signal = arr.elems[0]
                     signal.name = 'mem'
-                    self._sanitize_signal(signal)
+                    # self._sanitize_signal(signal)
 
                     mapping = self._signals.get(signal, None)
                     if mapping is None:
