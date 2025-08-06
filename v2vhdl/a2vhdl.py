@@ -600,9 +600,10 @@ class Port(Signal):
         #     self.reset_statement = None
 
 class Memory(Signal):
-    def __init__(self, signal, domain = None):
+    def __init__(self, signal, domain = None, w_index=None, r_index=None):
         super().__init__(signal, domain=domain)
-        self.r_index = self.w_index = None
+        self.w_index = w_index
+        self.r_index = r_index
         self.init = []
 
     @property
@@ -777,11 +778,11 @@ class Module:
             raise RuntimeError(f"Missing signal {signal.name} from module {self.name}")
         return s
 
-    def _new_signal(self, width=1, prefix=None):
+    def _new_signal(self, width=1, prefix=None, mapping=Signal, **kwargs):
         name = prefix or 'tmp'
         new = ast.Signal(width, name=name)
         # self._sanitize_signal(new)
-        self._signals[new] = Signal(new)
+        self._signals[new] = mapping(new, **kwargs)
 
         return new
 
@@ -812,6 +813,13 @@ class Module:
         if self.top:
             self._cleanup_signal_names()
 
+
+        if isinstance(self, MemoryModule):
+            print('Statements:', self.fragment.statements)
+            for signal in self._signals:
+                print(signal, self._signals[signal].statements)
+
+
     def _prepare_signals(self):
 
         # TODO: Possibly create intermediate signals so that ports are always wire
@@ -826,45 +834,6 @@ class Module:
                 # self._sanitize_signal(signal)
                 entry = self._signals[signal] = Signal(signal)
             entry.domain = domain
-
-    def _process_lhs_array(self, lhs, rhs, start_idx=None, stop_idx=None):
-        case = 0
-        cases = {}
-
-        while True:
-            idx = case
-            if idx >= len(lhs.elems):
-                break
-
-            part = lhs.elems[idx]
-            cases[case] = self._process_lhs(part, rhs, start_idx, stop_idx)
-            case += 1
-
-        return self._open_switch(lhs.index, cases)
-
-    def _process_rhs_array(self, rhs):
-        if not rhs.elems:
-            rhs = self._zero_size_signal()
-        else:
-            for i, elem in enumerate(rhs.elems):
-                rhs.elems[i] = self._process_rhs(elem)
-
-            rhs.index = self._process_rhs(rhs.index)
-
-            new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='array')
-
-            index = self._process_rhs(rhs.index)
-            cases = {
-                i: [Assign(elem)] for i, elem in enumerate(rhs.elems)
-            }
-
-            # if 2**len(index) > len(rhs.elems):
-            #     cases[None] = 0 # Default
-
-            self._add_new_statement(new_rhs, Switch(index, cases))
-            rhs = new_rhs
-
-        return rhs
 
     def _process_lhs(self, lhs, rhs, start_idx=None, stop_idx=None):
         res = []
@@ -934,7 +903,19 @@ class Module:
                 res.extend(self._open_switch(lhs.offset, cases))
 
         elif isinstance(lhs, ast.ArrayProxy):
-            res.extend(self._process_lhs_array(lhs, rhs, start_idx, stop_idx))
+            case = 0
+            cases = {}
+
+            while True:
+                idx = case
+                if idx >= len(lhs.elems):
+                    break
+
+                part = lhs.elems[idx]
+                cases[case] = self._process_lhs(part, rhs, start_idx, stop_idx)
+                case += 1
+
+            res.extend(self._open_switch(lhs.index, cases))
 
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
@@ -995,7 +976,26 @@ class Module:
                 rhs = new_rhs
 
         elif isinstance(rhs, ast.ArrayProxy):
-            rhs = self._process_rhs_array(rhs)
+            if not rhs.elems:
+                rhs = self._zero_size_signal()
+            else:
+                for i, elem in enumerate(rhs.elems):
+                    rhs.elems[i] = self._process_rhs(elem)
+
+                rhs.index = self._process_rhs(rhs.index)
+
+                new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='array')
+
+                index = self._process_rhs(rhs.index)
+                cases = {
+                    i: [Assign(elem)] for i, elem in enumerate(rhs.elems)
+                }
+
+                # if 2**len(index) > len(rhs.elems):
+                #     cases[None] = 0 # Default
+
+                self._add_new_statement(new_rhs, Switch(index, cases))
+                rhs = new_rhs
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
 
@@ -1132,95 +1132,102 @@ class Module:
 class MemoryModule(Module):
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
-        self._mem = self._elems = None
+        self.invalid_names.pop()
+
+        self._mem = self._read_proxy = self._write_proxy = None
+
+        has_rclk = fragment.parameters.get('RD_CLK_ENABLE', ast.Const(0, 1))
+        if has_rclk.value:
+            rclk = fragment.named_ports.get('RD_CLK', None)
+            if rclk is None:
+                raise RuntimeError(f"Missing read clock for memory {self.name}")
+            self._rdom = self._find_domain_from_clock(self._process_rhs(rclk[0]))
+        else:
+            self._rdom = None
+
+        has_wclk = fragment.parameters.get('WR_CLK_ENABLE', ast.Const(0, 1))
+        if has_wclk.value:
+            wclk = fragment.named_ports.get('WR_CLK', None)
+            if wclk is None:
+                raise RuntimeError(f"Missing read clock for memory {self.name}")
+            self._wdom = self._find_domain_from_clock(self._process_rhs(wclk[0]))
+        else:
+            self._wdom = None
+
+        rindex = fragment.named_ports.get('RD_ADDR', None)
+        if rindex is None:
+            raise RuntimeError(f"Failed to find read address for memory {self.name}")
+        self._rindex = self._process_rhs(rindex[0])
+
+        windex = fragment.named_ports.get('WR_ADDR', None)
+        if windex is None:
+            raise RuntimeError(f"Failed to find write address for memory {self.name}")
+        self._windex = self._process_rhs(windex[0])
+
+        self._width = fragment.parameters.get('WIDTH', None)
+        if self._width is None:
+            raise RuntimeError(f"Failed to find width for memory {self.name}")
+
+        self._size = fragment.parameters.get('SIZE', None)
+        if self._size is None:
+            raise RuntimeError(f"Failed to find size for memory {self.name}")
+
+    def _find_domain_from_clock(self, clock):
+        for domain in self.domains.values():
+            if domain.clk is clock:
+                return domain
+        raise RuntimeError(f"Failed to find domain for clock {clock}")
 
     def _prepare_signals(self):
         super()._prepare_signals()
 
-        self._mem = None
+        # TODO: What about read-only?
 
-        remove_signals = []
+        self._read_proxy = self._new_signal(width = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
+        self._write_proxy = self._new_signal(width = self._width, prefix = f'{self.name}_wdata')
 
-        if not self._find_memory(self.fragment.statements):
-            raise RuntimeError(f"Failed to detect memory from Memory block {self.name}")
+        self._mem = self._signals[self._new_signal(
+            width   = self._width,
+            prefix  = self.name,
+            mapping = Memory,
+            domain  = self._wdom.name,
+            w_index = self._windex,
+            r_index = self._rindex
+        )]
 
-        for signal, mapping in self._signals.items():
-            if signal in self._elems and signal is not self._mem.signal:
-                remove_signals.append(signal)
-                if self._mem.domain != mapping.domain:
-                    raise RuntimeError(f"Conflicting domains for memory {self.name}")
+        for _ in range(self._size):
+            self._mem.init.append(ast.Const(0, 1))
 
-        for signal in remove_signals:
-            self._signals.pop(signal)
+        self._add_new_statement(self._read_proxy, Assign(self._mem))
+        self._add_new_statement(self._mem.signal, Assign(self._write_proxy))
 
-        self._clean_statements(self.fragment.statements, remove_signals)
+        self._find_initials_and_clean_statements(self.fragment.statements)
 
-    def _find_memory(self, statements):
-        for st in statements:
+    def _find_initials_and_clean_statements(self, statements):
+        remove_statements = []
+        for i, st in enumerate(statements):
             if isinstance(st, ast.Assign):
-                arr = None
+                elems = None
                 if isinstance(st.lhs, ast.ArrayProxy):
-                    arr = st.lhs
+                    elems = st.lhs.elems
+                    st.lhs = self._write_proxy
                 elif isinstance(st.rhs, ast.ArrayProxy):
-                    arr = st.rhs
+                    elems = st.rhs.elems
+                    st.rhs = self._read_proxy
 
-                if arr is not None:
-                    if not arr.elems:
-                        raise RuntimeError(f"Zero-depth memory {self.name} not allowed!")
+                if elems is not None:
+                    if len(elems) != self._size:
+                        raise RuntimeError(f"Mismatch in array size for memory {self.name}")
 
-                    signal = arr.elems[0]
-                    signal.name = 'mem'
-                    # self._sanitize_signal(signal)
-
-                    mapping = self._signals.get(signal, None)
-                    if mapping is None:
-                        domain = None   # Memory is read-only, so we don't care
-                    else:
-                        domain = mapping.domain
-
-                    self._mem = Memory(signal, domain = domain)
-                    self._elems = ast.SignalSet(arr.elems)
-                    self._signals[signal] = self._mem
-
-                    for elem in self._elems:
-                        self._mem.init.append(ast.Const(elem.reset, len(elem)))
-
-                    return True
+                    for i, elem in enumerate(elems):
+                        self._mem.init[i] = ast.Const(elem.reset, len(elem))
+                        self._signals.pop(elem, None)
 
             elif isinstance(st, ast.Switch):
-                for stmts in st.cases.values():
-                    if self._find_memory(stmts):
-                        return True
-
-        return False
-
-    def _clean_statements(self, statements, remove_signals):
-        remove_statements = []
-        last_statement = None
-        for i, statement in enumerate(statements):
-            if isinstance(statement, ast.Assign):
-                for signal in remove_signals:
-                    if statement.lhs is signal or statement.rhs is signal:
-                        remove_statements.append(i)
-                        break
-
-            elif isinstance(statement, ast.Switch):
-                for sw_statements in statement.cases.values():
-                    self._clean_statements(sw_statements, remove_signals)
-
-                # Ugly fix for duplicated rst statements
-                if str(statement) == str(last_statement):
+                if st.test is self._wdom.rst:
                     remove_statements.append(i)
-
-            last_statement = statement
+                for stmts in st.cases.values():
+                    self._find_initials_and_clean_statements(stmts)
 
         for i in reversed(remove_statements):
             statements.pop(i)
-
-    def _process_lhs_array(self, lhs, rhs, start_idx=None, stop_idx=None):
-        self._mem.w_index = lhs.index
-        return [(self._mem.signal, Assign(rhs))]
-
-    def _process_rhs_array(self, rhs):
-        self._mem.r_index = rhs.index
-        return self._mem
