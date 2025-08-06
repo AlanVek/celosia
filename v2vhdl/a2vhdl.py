@@ -2,6 +2,7 @@ from amaranth.hdl import ast, ir
 from textwrap import dedent, indent
 
 # TODO: If we find multiple signals with same statements, maybe we can merge them into one!
+# TODO: Distinguish between submodule name and type, so we can maintain instance names
 
 class HDL:
     case_sensitive = False
@@ -450,7 +451,7 @@ endmodule
             if params:
                 res += ' #(\n'
                 for key, value in params.items():
-                    res += f'    .{key}({value}),\n'   # TODO: Check types
+                    res += f'    .{key}({cls._parse_rhs(value)}),\n'   # TODO: Check types
                 res = res[:-2] + '\n)'
 
             res += f' {submodule.name} (\n'
@@ -469,14 +470,20 @@ endmodule
                 rhs.value += 2**rhs.width
                 signed = True
 
-            rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
+            rhs = f"{max(1, rhs.width)}'h{hex(rhs.value)[2:]}"
             if signed:
                 rhs = f'$signed({rhs})'
+
+        elif isinstance(rhs, int):
+            pass
+
+        elif isinstance(rhs, str):
+            rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
-            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1] if len(part))} }}"
+            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1])} }}"
         elif isinstance(rhs, ast.Slice):
             if rhs.start == 0 and rhs.stop >= len(rhs.value):
                 rhs = cls._parse_rhs(rhs.value)
@@ -947,8 +954,7 @@ class Module:
                 rhs = self._process_rhs(rhs.parts[0])
             else:
                 new_rhs = self._new_signal(len(rhs), prefix='concat')
-                for i, part in enumerate(rhs.parts):
-                    rhs.parts[i] = self._process_rhs(part)
+                rhs.parts = [self._process_rhs(part) for part in rhs.parts if len(part)]
 
                 self._add_new_assign(new_rhs, rhs)
                 rhs = new_rhs
