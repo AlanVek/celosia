@@ -461,12 +461,15 @@ endmodule
     @classmethod
     def _parse_rhs(cls, rhs):
         if isinstance(rhs, ast.Const):
-            fmt = 'h'
-            sign = ''
+            signed = False
             if rhs.value < 0:
-                sign += '-'
-                fmt = f's{fmt}'
-            rhs = f"{sign}{rhs.width}'{fmt}{hex(abs(rhs.value))[2:]}"
+                rhs.value += 2**rhs.width
+                signed = True
+
+            rhs = f"{rhs.width}'h{hex(rhs.value)[2:]}"
+            if signed:
+                rhs = f'$signed({rhs})'
+
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
@@ -525,7 +528,9 @@ endmodule
                 raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
         elif isinstance(rhs, ast.Part):
-            rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'   # TODO: Check size mismatch (probably OK)
+            if rhs.stride != 1:
+                raise RuntimeError("Only Parts with stride 1 supported at end stage!")
+            rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'
         elif isinstance(rhs, Memory):
             rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.r_index)}]'
         else:
@@ -625,11 +630,20 @@ class Switch(Statement):
         self.cases = {
             self.convert_case(test, case): statements for case, statements in cases.items()
         }
+        self.strip_unused_cases()
 
         # Move default to last place
         default = self.cases.pop(None, None)
         if default is not None:
             self.cases[None] = default
+
+    def strip_unused_cases(self):
+        if not self.cases.get(None, None):
+            pops = [
+                case for case, statements in self.cases.items() if not statements
+            ]
+            for pop in pops:
+                self.cases.pop(pop)
 
     @staticmethod
     def convert_case(test, case):
@@ -881,15 +895,12 @@ class Module:
             if isinstance(lhs.offset, ast.Const):
                 raise RuntimeError("Part with const offset is Slice!")
             else:
-                if lhs.stride != 1:
-                    raise NotImplementedError("Only stride=1 supported for Parts")
-
                 case = 0
                 cases = {}
 
                 while True:
-                    offset = case * lhs.width
-                    if offset >= len(lhs):
+                    offset = case * lhs.stride
+                    if offset >= len(lhs.value):
                         break
 
                     part = lhs.value[offset : offset + lhs.width]
@@ -964,14 +975,17 @@ class Module:
             if isinstance(rhs.offset, ast.Const):
                 raise RuntimeError("Part with const offset is Slice!")
             else:
-                if rhs.stride != 1:
-                    raise NotImplementedError("Only stride=1 supported for Parts")
-
-                new_rhs = self._new_signal(rhs.width, prefix='part')
                 rhs.value = self._process_rhs(rhs.value)
-                rhs.offset = self._process_rhs(rhs.offset)
 
-                self._add_new_assign(new_rhs, rhs)
+                if rhs.stride == 1:
+                    new_rhs = self._new_signal(rhs.width, prefix='part')
+                    rhs.offset = self._process_rhs(rhs.offset)
+                    self._add_new_assign(new_rhs, rhs)
+                else:
+                    rhs.offset = self._process_rhs(rhs.offset * rhs.stride)
+                    rhs.stride = 1
+                    new_rhs = self._process_rhs(rhs)
+
                 rhs = new_rhs
 
         elif isinstance(rhs, ast.ArrayProxy):
