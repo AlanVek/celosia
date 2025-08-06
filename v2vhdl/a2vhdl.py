@@ -211,6 +211,9 @@ endmodule
         port_block = initial_block = assignment_block = blocks_block = ''
 
         for mapping in module._signals.values():
+            if not len(mapping.signal):
+                continue
+
             initial_block += cls._generate_initial(mapping)
             if isinstance(mapping, Port):
                 port_block += f'{cls._generate_one_port(mapping)},\n'
@@ -473,7 +476,7 @@ endmodule
         elif isinstance(rhs, ast.Signal):
             rhs = rhs.name
         elif isinstance(rhs, ast.Cat):
-            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1])} }}"
+            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1] if len(part))} }}"
         elif isinstance(rhs, ast.Slice):
             if rhs.start == 0 and rhs.stop >= len(rhs.value):
                 rhs = cls._parse_rhs(rhs.value)
@@ -1229,7 +1232,7 @@ class MemoryModule(Module):
             width   = self._width,
             prefix  = self.name,
             mapping = Memory,
-            domain  = self._wdom.name,
+            domain  = None if self._wdom is None else self._wdom.name,
             w_index = self._windex,
             r_index = self._rindex,
             init    = self._init,
