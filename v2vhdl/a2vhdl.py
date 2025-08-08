@@ -201,8 +201,8 @@ endmodule
             submodules_block = submodules_block,
             blocks_block = blocks_block,
         )
-        for submodule, ports in module.submodules:
-            if ports is not None:   # Instance
+        for submodule, _ in module.submodules:
+            if isinstance(submodule, InstanceModule):
                 continue
             res += '\n' + cls._convert_module(submodule)
 
@@ -428,8 +428,8 @@ endmodule
 
         for submodule, ports in module.submodules:
             params = {}
-            if ports is None:
-                if isinstance(submodule.fragment, ir.Instance):
+            if not isinstance(submodule, InstanceModule):
+                if ports is not None:
                     raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
 
                 if submodule.empty:
@@ -443,11 +443,11 @@ endmodule
 
                 type = submodule.name
             else:
-                if not isinstance(submodule.fragment, ir.Instance):
+                if ports is None:
                     raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
 
-                params.update(submodule.fragment.parameters)
-                type = submodule.fragment.type
+                params.update(submodule.parameters)
+                type = submodule.type
 
             res += f'{type}'
 
@@ -459,7 +459,7 @@ endmodule
 
             res += f' {submodule.name} (\n'
             for key, value in ports.items():
-                res += f'    .{key}({cls._parse_rhs(value)}),\n'
+                res += f'    .{key}({cls._parse_rhs(value, allow_signed=False)}),\n'
 
             res = res[:-2] + '\n);\n'
 
@@ -704,7 +704,7 @@ class Module:
 
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         if invalid_names is None:
-            invalid_names = []
+            invalid_names = set()
 
         self.invalid_names = invalid_names
         self.top = top
@@ -723,7 +723,7 @@ class Module:
         self.ports = []
         self._remapped = ast.SignalDict()
 
-        self.invalid_names.append(self._change_case(name))
+        self.invalid_names.add(self._change_case(name))
 
     @property
     def empty(self):
@@ -745,6 +745,14 @@ class Module:
     @property
     def domains(self):
         return self.fragment.domains
+
+    @property
+    def parameters(self):
+        return {}
+
+    @property
+    def type(self):
+        return self.name
 
     @property
     def case_sensitive(self):
@@ -978,6 +986,8 @@ class Module:
         return res
 
     def _process_rhs(self, rhs):
+        if len(rhs) > 100:
+            print(rhs, len(rhs))
         if isinstance(rhs, ast.Const):
             pass
         elif isinstance(rhs, ast.Signal):
@@ -1026,18 +1036,12 @@ class Module:
             if isinstance(rhs.offset, ast.Const):
                 raise RuntimeError("Part with const offset is Slice!")
             else:
-                rhs.value = self._process_rhs(rhs.value)
+                shift = rhs.offset
 
-                if rhs.stride == 1:
-                    new_rhs = self._new_signal(rhs.shape(), prefix='part')
-                    rhs.offset = self._process_rhs(rhs.offset)
-                    self._add_new_assign(new_rhs, rhs)
-                else:
-                    rhs.offset = self._process_rhs(rhs.offset * rhs.stride)
-                    rhs.stride = 1
-                    new_rhs = self._process_rhs(rhs)
+                if rhs.stride > 1:
+                    shift = shift * rhs.stride
 
-                rhs = new_rhs
+                rhs = self._process_rhs(rhs.value >> shift)
 
         elif isinstance(rhs, ast.ArrayProxy):
             if not rhs.elems:
@@ -1092,11 +1096,15 @@ class Module:
                 if len(rhs.operands) == 1:
                     rhs.operands = [self._fix_rhs_size(rhs.operands[0], size, _allow_downsize=_allow_downsize)]
                 else:
-                    max_size = max(size, max(len(op) for op in operands))
-                    # TODO: Some operations (like logical operations) can be downsized!
                     if len(rhs.operands) == 2:
-                        rhs.operands = [self._fix_rhs_size(op, max_size, _allow_downsize=False) for op in operands]
+                        if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|', '<', '<=', '==', '!=', '>', '>='):
+                            max_size = max(size, max(len(op) for op in operands))
+                            rhs.operands = [self._fix_rhs_size(op, max_size, _allow_downsize=False) for op in operands]
+                        elif rhs.operator in ('<<', '>>'):
+                            max_size = max(size, len(operands[0]))
+                            rhs.operands = [self._fix_rhs_size(operands[0], max_size, _allow_downsize=False)] + operands[1:]
                     elif len(rhs.operands) == 3:
+                        max_size = max(size, max(len(op) for op in operands))
                         rhs.operands = [operands[0]] + [self._fix_rhs_size(op, max_size, _allow_downsize=False) for op in operands[1:]]
                     else:
                         raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
@@ -1160,10 +1168,14 @@ class Module:
     def _prepare_statements(self):
         self._execute_statements(self.fragment.statements)
 
-    def _process_memory(self, submodule):
-        fragment = submodule.fragment
+    def _submodule_create(self, name, fragment, type=None, **kwargs):
+        if type is None:
+            type = Module
 
-        m = MemoryModule(submodule.name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False)
+        return type(name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False, **kwargs)
+
+    def _process_memory(self, subfragment, name):
+        m = self._submodule_create(name, subfragment, MemoryModule)
         m.prepare()
 
         for signal, mapping in m._signals.items():
@@ -1178,17 +1190,16 @@ class Module:
                 for statement in mapping.statements:
                     self._signals[signal].add_statement(statement)
 
-    def _process_submodule_instance(self, submodule):
+    def _process_submodule_instance(self, subfragment, name):
         ports = {}
 
-        subfragment = submodule.fragment
-
-        self.invalid_names.append(subfragment.type)
+        self.invalid_names.add(subfragment.type)
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
-            self._process_memory(submodule)
+            self._process_memory(subfragment, name)
             submodule = None
         else:
+            submodule = self._submodule_create(name, subfragment, InstanceModule)
             submodule.prepare()
             for port_name, (port_value, kind) in subfragment.named_ports.items():
                 local_signal = None
@@ -1224,11 +1235,10 @@ class Module:
                 subname = 'unnamed'
 
             name = self.sanitize_module(subname)
-            submodule = Module(name, subfragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False)
-
             if isinstance(subfragment, ir.Instance):
-                submodule, ports = self._process_submodule_instance(submodule)
+                submodule, ports = self._process_submodule_instance(subfragment, name)
             else:
+                submodule = self._submodule_create(name, subfragment)
                 submodule.prepare()
                 ports = None
                 for port in submodule.ports:
@@ -1244,7 +1254,19 @@ class Module:
             if submodule is not None:
                 self.submodules.append((submodule, ports))
 
-class MemoryModule(Module):
+class InstanceModule(Module):
+    def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
+        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
+
+    @property
+    def parameters(self):
+        return {}
+
+    @property
+    def type(self):
+        return self.name
+
+class MemoryModule(InstanceModule):
 
     allow_remapping = False
 
