@@ -870,9 +870,9 @@ class Module:
             self.invalid_names.clear()
 
     def _cleanup_signal_names(self):
-        self.invalid_names.add(self._change_case(self.name))
         for submodule, _ in self.submodules:
             submodule.name = self.sanitize_module(submodule.name)
+            self.invalid_names.add(self._change_case(submodule.name))
 
         extra = set()
         for signal, mapping in self._signals.items():
@@ -920,6 +920,7 @@ class Module:
         if self.top:
             self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
             self.name = self.sanitize_module(self.name)
+            self.invalid_names.add(self._change_case(self.name))
 
         self._prepare_signals()
         self._prepare_statements()
@@ -1108,7 +1109,7 @@ class Module:
                 if rhs.stride > 1:
                     shift = shift * rhs.stride
 
-                rhs = self._process_rhs((rhs.value >> shift)[:rhs.width])
+                rhs = self._process_rhs((rhs.value >> shift)[:rhs.width])   # TODO: This is cleaner, but may cause issues!
 
         elif isinstance(rhs, ast.ArrayProxy):
             if not rhs.elems:
