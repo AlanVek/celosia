@@ -649,26 +649,60 @@ class Switch(Statement):
         self.cases = {
             self.convert_case(test, case): statements for case, statements in cases.items()
         }
-        self.strip_unused_cases()
-
         # Move default to last place
         default = self.cases.pop(None, None)
         if default is not None:
             self.cases[None] = default
 
+        self.strip_unused_cases()
+
+    @staticmethod
+    def _get_matching_patterns(case):
+        tmp = [case]
+        while True:
+            if not any('?' in t for t in tmp):
+                break
+
+            pops = len(tmp)
+            for t in tmp[:pops]:
+                tmp.append(t.replace('?', '0', count=1))
+                tmp.append(t.replace('?', '1', count=1))
+                tmp.pop(0)
+
+        return set(tmp)
+
     def strip_unused_cases(self):
-        if not self.cases.get(None, None):
-            pops = [
-                case for case, statements in self.cases.items() if not statements
-            ]
-            for pop in pops:
-                self.cases.pop(pop)
+        # TODO: Switch to mask-based matches to avoid overhead
+
+        has_default = self.cases.get(None, None) is not None
+
+        patterns = {
+            case: self._get_matching_patterns(case) for case in self.cases if case is not None
+        }
+        if has_default:
+            patterns[None] = set()
+            for i in range(2**len(self.test)):
+                patterns[None].add(format(i, f'0{len(self.test)}b'))
+
+        before = set()
+        pops = []
+
+        for case, statements in reversed(self.cases.items()):
+            curr_matches = patterns[case]
+            if not statements:
+                if curr_matches.isdisjoint(before):
+                    pops.append(case)
+            else:
+                before.update(curr_matches)
+
+        for pop in pops:
+            self.cases.pop(pop)
 
     @staticmethod
     def convert_case(test, case):
         if isinstance(case, tuple):
             if len(case) == 1:
-                case = Switch.convert_case(test, case[0])
+                case = Switch.convert_case(test, case[0])   # TODO: May be more than 1!
             elif len(case) == 0:
                 case = None
             else:
@@ -678,6 +712,8 @@ class Switch(Statement):
                 case = case.replace('-', '?')
         elif isinstance(case, int):
             case = Switch.convert_case(test, format(case, f'0{len(test)}b'))
+        else:
+            raise RuntimeError(f"Unknown switch case: {case}")
 
         return case
 
@@ -1070,6 +1106,7 @@ class Module:
         return rhs
 
     def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True):
+        # TODO: Maybe allow_downsize should always be True
 
         if isinstance(rhs, ast.Const):
             if rhs.width < size:
@@ -1087,7 +1124,7 @@ class Module:
                 for i, part in enumerate(rhs.parts):
                     rhs.parts[i] = self._fix_rhs_size(part, len(part), _allow_downsize=False)
 
-            elif isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
+            if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
                 if len(rhs) < size:
                     new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'expanded')
                     self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, len(rhs), _check_signed=False, _allow_downsize=_allow_downsize)) # TODO: _Check check_signed
@@ -1121,19 +1158,25 @@ class Module:
 
     def _open_switch(self, test, cases):
         res = []
-
         per_signal = ast.SignalDict()
+
+        all_signals = ast.SignalSet()
         for case, statements in cases.items():
             for signal, st in statements:
-                per_signal.setdefault(signal, {}).setdefault(case, []).append(st)
+                all_signals.add(signal)
 
-        for signal_cases in per_signal.values():
-            for case in cases:
-                signal_cases.setdefault(case, [])
+        for case, statements in cases.items():
+            for signal in all_signals:
+                per_signal.setdefault(signal, {}).setdefault(case, [])
+
+            for signal, st in statements:
+                per_signal[signal][case].append(st)
+
+        test = self._process_rhs(self._fix_rhs_size(test, len(test)))
 
         res = []
         for signal, cases in per_signal.items():
-            res.append((signal, Switch(self._process_rhs(self._fix_rhs_size(test, len(test))), cases)))
+            res.append((signal, Switch(test, cases)))
 
         return res
 
