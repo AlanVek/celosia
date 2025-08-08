@@ -723,8 +723,6 @@ class Module:
         self.ports = []
         self._remapped = ast.SignalDict()
 
-        self.invalid_names.add(self._change_case(name))
-
     @property
     def empty(self):
         if not isinstance(self.fragment, ir.Fragment):
@@ -762,13 +760,12 @@ class Module:
         return name if self.case_sensitive else name.lower()
 
     def _sanitize(self, name, extra=None):
-        invalid = set(['', self.name])
+        invalid = set([''])
         invalid.update(self._change_case(submodule.name) for submodule, _ in self.submodules)
         # invalid.update(self._change_case(signal.name) for signal in self._signals)
         invalid.update(self.invalid_names)
         if extra is not None:
             invalid.update(extra)
-
         if not name:
             name = 'unnamed'
 
@@ -810,12 +807,16 @@ class Module:
             self.invalid_names.clear()
 
     def _cleanup_signal_names(self):
-        extra = []
-        for signal in self._signals:
-            self._sanitize_signal(signal, extra=extra)
-            extra.append(self._change_case(signal.name))
+        self.invalid_names.add(self._change_case(self.name))
+
+        extra = set()
+        for signal, mapping in self._signals.items():
+            if self.top or not isinstance(mapping, Port):
+                self._sanitize_signal(signal, extra=extra)
+            extra.add(self._change_case(signal.name))
 
         for submodule, _ in self.submodules:
+            submodule.name = self.sanitize_module(submodule.name, extra=extra)
             submodule._cleanup_signal_names()
 
     def _get_signal(self, signal):
@@ -854,6 +855,7 @@ class Module:
     def prepare(self, ports=None, platform=None):
         if self.top:
             self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
+            self.name = self.sanitize_module(self.name)
 
         self._prepare_signals()
         self._prepare_statements()
@@ -986,8 +988,6 @@ class Module:
         return res
 
     def _process_rhs(self, rhs):
-        if len(rhs) > 100:
-            print(rhs, len(rhs))
         if isinstance(rhs, ast.Const):
             pass
         elif isinstance(rhs, ast.Signal):
@@ -1074,7 +1074,7 @@ class Module:
         if isinstance(rhs, ast.Const):
             if rhs.width < size:
                 rhs = ast.Const(rhs.value, size)
-            elif _allow_downsize:
+            elif _allow_downsize and size > len(rhs):
                 rhs = ast.Const(rhs.value & int('1' * size, 2), size)   # TODO: Check negative
 
         else:
@@ -1234,11 +1234,10 @@ class Module:
             if subname is None:
                 subname = 'unnamed'
 
-            name = self.sanitize_module(subname)
             if isinstance(subfragment, ir.Instance):
-                submodule, ports = self._process_submodule_instance(subfragment, name)
+                submodule, ports = self._process_submodule_instance(subfragment, subname)
             else:
-                submodule = self._submodule_create(name, subfragment)
+                submodule = self._submodule_create(subname, subfragment)
                 submodule.prepare()
                 ports = None
                 for port in submodule.ports:
@@ -1272,7 +1271,6 @@ class MemoryModule(InstanceModule):
 
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
-        self.invalid_names.pop()
 
         self._mem = self._read_proxy = None
 
