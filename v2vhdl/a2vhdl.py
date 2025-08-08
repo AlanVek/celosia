@@ -1083,7 +1083,11 @@ class Module:
                 self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize))
                 return new_rhs
 
-            if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
+            if isinstance(rhs, ast.Cat):
+                for i, part in enumerate(rhs.parts):
+                    rhs.parts[i] = self._fix_rhs_size(part, len(part), _allow_downsize=False)
+
+            elif isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
                 if len(rhs) < size:
                     new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'expanded')
                     self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, len(rhs), _check_signed=False, _allow_downsize=_allow_downsize)) # TODO: _Check check_signed
@@ -1129,7 +1133,7 @@ class Module:
 
         res = []
         for signal, cases in per_signal.items():
-            res.append((signal, Switch(self._process_rhs(test), cases)))
+            res.append((signal, Switch(self._process_rhs(self._fix_rhs_size(test, len(test))), cases)))
 
         return res
 
