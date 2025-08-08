@@ -1052,6 +1052,9 @@ class Module:
         return res
 
     def _process_rhs(self, rhs):
+        # TODO: Possibly check if return value differs input value to determine whether a new signal is needed
+        # so we can reduce code size
+
         if isinstance(rhs, ast.Const):
             pass
         elif isinstance(rhs, ast.Signal):
@@ -1105,7 +1108,7 @@ class Module:
                 if rhs.stride > 1:
                     shift = shift * rhs.stride
 
-                rhs = self._process_rhs(rhs.value >> shift)
+                rhs = self._process_rhs((rhs.value >> shift)[:rhs.width])
 
         elif isinstance(rhs, ast.ArrayProxy):
             if not rhs.elems:
@@ -1134,8 +1137,6 @@ class Module:
         return rhs
 
     def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True, _force_sign=None):
-        # TODO: Check _force_sign for other than const
-
         if isinstance(rhs, ast.Const):
             if rhs.width < size:
                 rhs = ast.Const(rhs.value, size)
@@ -1168,6 +1169,15 @@ class Module:
             if isinstance(rhs, ast.Cat):
                 for i, part in enumerate(rhs.parts):
                     rhs.parts[i] = self._fix_rhs_size(part, len(part), _allow_downsize=False)
+            elif isinstance(rhs, ast.Slice):
+                rhs.value = self._fix_rhs_size(rhs.value, len(rhs), _allow_downsize=False)
+            elif isinstance(rhs, ast.Part):
+                rhs.offset = self._fix_rhs_size(rhs.offset, len(rhs.offset), _allow_downsize=False)
+                rhs.value = self._fix_rhs_size(rhs.value, len(rhs.value), _allow_downsize=False)
+            elif isinstance(rhs, ast.ArrayProxy):
+                rhs.index = self._fix_rhs_size(rhs.index, len(rhs.index), _allow_downsize=False)
+                for i, elem in enumerate(rhs.elems):
+                    rhs.elems[i] = self._fix_rhs_size(elem, len(elem), _allow_downsize=False)
 
             if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
                 if len(rhs) < size:
