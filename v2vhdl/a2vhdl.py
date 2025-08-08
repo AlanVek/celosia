@@ -120,7 +120,8 @@ class Verilog(HDL):
     protected = [
         'always',         'and',            'assign',         'begin',
         'buf',            'bufif0',         'bufif1',         'case',
-        'casex',          'casez',          'cmos',           'deassign',
+        'casex',          'casez',          'cmos',           'config',
+        'deassign',
         'default',        'defparam',       'design',         'disable',
         'edge',           'else',           'end',            'endcase',
         'endfunction',    'endmodule',      'endprimitive',   'endspecify',
@@ -437,6 +438,8 @@ endmodule
 
                 ports = {}
                 for port in submodule.ports:
+                    if not len(port.signal):
+                        continue
                     # if port.signal not in module._signals:
                     #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
                     ports[port.signal.name] = port.signal
@@ -672,6 +675,29 @@ class Switch(Statement):
         return set(tmp)
 
     def strip_unused_cases(self):
+        # import fnmatch
+        # patterns = []
+        # pops = []
+        # for case, statements in reversed(self.cases.items()):
+        #     if case is None:
+        #         case = '?' * len(self.test)
+        #     if not statements:
+        #         for c in patterns:
+        #             mask = case
+        #             for i in range(len(c)):
+        #                 if c[i] == '?':
+        #                     mask = mask[:i] + '?' + mask[1+i:]
+        #             if fnmatch.fnmatch(c, mask):
+        #                 break
+        #         else:
+        #             pops.append(case)
+        #     else:
+        #         patterns.append(case)
+
+        # for pop in pops:
+        #     self.cases.pop(pop)
+
+        # return
         # TODO: Switch to mask-based matches to avoid overhead
 
         has_default = self.cases.get(None, None) is not None
@@ -710,6 +736,7 @@ class Switch(Statement):
         elif isinstance(case, str):
             if '-' in case or '?' in case:
                 case = case.replace('-', '?')
+            case = case.replace(' ', '')
         elif isinstance(case, int):
             case = Switch.convert_case(test, format(case, f'0{len(test)}b'))
         else:
@@ -1105,19 +1132,36 @@ class Module:
 
         return rhs
 
-    def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True):
-        # TODO: Maybe allow_downsize should always be True
+    def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True, _force_sign=None):
+        # TODO: Check _force_sign for other than const
 
         if isinstance(rhs, ast.Const):
             if rhs.width < size:
                 rhs = ast.Const(rhs.value, size)
-            elif _allow_downsize and size > len(rhs):
-                rhs = ast.Const(rhs.value & int('1' * size, 2), size)   # TODO: Check negative
+            elif _allow_downsize and rhs.width > size:
+                rhs = ast.Const(rhs.value & ((1 << size) - 1), size)   # TODO: Check negative
 
+            if _force_sign is not None:
+                signed = rhs.signed
+                if _force_sign and not signed:
+                    rhs.value -= 2**rhs.width
+                elif not _force_sign and signed:
+                    rhs.value += 2**rhs.width
         else:
-            if _check_signed and rhs.shape().signed:
-                new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'signed')
-                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize))
+            signed = rhs.shape().signed
+            if _force_sign is not None:
+                if _force_sign and not signed:
+                    new_rhs = self._new_signal(ast.signed(size), prefix = 'signed')
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize, _force_sign=None))
+                    return new_rhs
+                elif not _force_sign and signed:
+                    new_rhs = self._new_signal(size, prefix = 'unsigned')
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize, _force_sign=None))
+                    return new_rhs
+
+            if _check_signed and signed:
+                new_rhs = self._new_signal(ast.signed(size), prefix = 'signed')
+                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize, _force_sign=_force_sign))
                 return new_rhs
 
             if isinstance(rhs, ast.Cat):
@@ -1129,18 +1173,21 @@ class Module:
                     new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'expanded')
                     self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, len(rhs), _check_signed=False, _allow_downsize=_allow_downsize)) # TODO: _Check check_signed
                     rhs = new_rhs
-                elif _allow_downsize and size > len(rhs):
+                elif _allow_downsize and len(rhs) > size:
                     rhs = rhs[:size]
 
             elif isinstance(rhs, ast.Operator):
                 operands = rhs.operands
                 if len(rhs.operands) == 1:
+                    if rhs.operator in ('b', 'r|', 'r&', 'r^'):
+                        _allow_downsize = False
                     rhs.operands = [self._fix_rhs_size(rhs.operands[0], size, _allow_downsize=_allow_downsize)]
                 else:
                     if len(rhs.operands) == 2:
                         if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|', '<', '<=', '==', '!=', '>', '>='):
                             max_size = max(size, max(len(op) for op in operands))
-                            rhs.operands = [self._fix_rhs_size(op, max_size, _allow_downsize=False) for op in operands]
+                            signed = any(op.shape().signed for op in rhs.operands)
+                            rhs.operands = [self._fix_rhs_size(op, max_size, _allow_downsize=False, _force_sign=signed) for op in operands]
                         elif rhs.operator in ('<<', '>>'):
                             max_size = max(size, len(operands[0]))
                             rhs.operands = [self._fix_rhs_size(operands[0], max_size, _allow_downsize=False)] + operands[1:]
