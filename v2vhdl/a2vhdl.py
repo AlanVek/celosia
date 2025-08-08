@@ -767,7 +767,7 @@ class Module:
 
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         if invalid_names is None:
-            invalid_names = set()
+            invalid_names = set([''])
 
         self.invalid_names = invalid_names
         self.top = top
@@ -823,10 +823,10 @@ class Module:
         return name if self.case_sensitive else name.lower()
 
     def _sanitize(self, name, extra=None):
-        invalid = set([''])
-        invalid.update(self._change_case(submodule.name) for submodule, _ in self.submodules)
+        # invalid = set([''])
+        # invalid.update(self._change_case(submodule.name) for submodule, _ in self.submodules)
         # invalid.update(self._change_case(signal.name) for signal in self._signals)
-        invalid.update(self.invalid_names)
+        invalid = self.invalid_names.copy()
         if extra is not None:
             invalid.update(extra)
         if not name:
@@ -871,6 +871,8 @@ class Module:
 
     def _cleanup_signal_names(self):
         self.invalid_names.add(self._change_case(self.name))
+        for submodule, _ in self.submodules:
+            submodule.name = self.sanitize_module(submodule.name)
 
         extra = set()
         for signal, mapping in self._signals.items():
@@ -879,7 +881,6 @@ class Module:
             extra.add(self._change_case(signal.name))
 
         for submodule, _ in self.submodules:
-            submodule.name = self.sanitize_module(submodule.name, extra=extra)
             submodule._cleanup_signal_names()
 
     def _get_signal(self, signal):
@@ -1357,7 +1358,7 @@ class InstanceModule(Module):
 
     @property
     def type(self):
-        return self.name
+        return self.fragment.type
 
 class MemoryModule(InstanceModule):
 
