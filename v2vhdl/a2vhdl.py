@@ -867,9 +867,9 @@ class Module:
         for submodule, _ in self.submodules:
             submodule.name = self.sanitize_module(submodule.name)
             self.invalid_names.add(self._change_case(submodule.name))
-            self.invalid_names.add(self._change_case(submodule.type))
             if not isinstance(submodule, InstanceModule):
                 submodule.type = self.sanitize_module(submodule.type)
+            self.invalid_names.add(self._change_case(submodule.type))
 
         extra = set()
         for signal, mapping in self._signals.items():
