@@ -864,11 +864,16 @@ class Module:
             self.invalid_names.clear()
 
     def _cleanup_signal_names(self):
+        if self.top:
+            extra_ports = set()
+        else:
+            extra_ports = set(port.signal.name for port in self.ports)
+
         for submodule, _ in self.submodules:
-            submodule.name = self.sanitize_module(submodule.name)
+            submodule.name = self.sanitize_module(submodule.name, extra=extra_ports)
             self.invalid_names.add(self._change_case(submodule.name))
             if not isinstance(submodule, InstanceModule):
-                submodule.type = self.sanitize_module(submodule.type)
+                submodule.type = self.sanitize_module(submodule.type, extra=extra_ports)
             self.invalid_names.add(self._change_case(submodule.type))
 
         extra = set()
