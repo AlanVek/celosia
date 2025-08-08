@@ -2,7 +2,6 @@ from amaranth.hdl import ast, ir
 from textwrap import dedent, indent
 
 # TODO: If we find multiple signals with same statements, maybe we can merge them into one!
-# TODO: Distinguish between submodule name and type, so we can maintain instance names
 
 class HDL:
     case_sensitive = False
@@ -195,7 +194,7 @@ endmodule
         submodules_block = cls._generate_submodule_blocks(module)
 
         res = cls.template.format(
-            name = module.name,
+            name = module.type,
             port_block = port_block,
             initials_block = initial_block,
             assignment_block = assignment_block,
@@ -444,15 +443,13 @@ endmodule
                     #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
                     ports[port.signal.name] = port.signal
 
-                type = submodule.name
             else:
                 if ports is None:
                     raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
 
                 params.update(submodule.parameters)
-                type = submodule.type
 
-            res += f'{type}'
+            res += f'{submodule.type}'
 
             if params:
                 res += ' #(\n'
@@ -765,7 +762,7 @@ class Module:
 
     allow_remapping = False
 
-    def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
+    def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True, type = None):
         if invalid_names is None:
             invalid_names = set([''])
 
@@ -773,6 +770,7 @@ class Module:
         self.top = top
 
         self.name = name
+        self.type = name if type is None else type
         self._fragment = fragment
         if top:
             self.fragment = None
@@ -810,10 +808,6 @@ class Module:
     @property
     def parameters(self):
         return {}
-
-    @property
-    def type(self):
-        return self.name
 
     @property
     def case_sensitive(self):
@@ -872,7 +866,9 @@ class Module:
     def _cleanup_signal_names(self):
         for submodule, _ in self.submodules:
             submodule.name = self.sanitize_module(submodule.name)
+            submodule.type = self.sanitize_module(submodule.type)
             self.invalid_names.add(self._change_case(submodule.name))
+            self.invalid_names.add(self._change_case(submodule.type))
 
         extra = set()
         for signal, mapping in self._signals.items():
@@ -1274,11 +1270,11 @@ class Module:
     def _prepare_statements(self):
         self._execute_statements(self.fragment.statements)
 
-    def _submodule_create(self, name, fragment, type=None, **kwargs):
-        if type is None:
-            type = Module
+    def _submodule_create(self, name, fragment, cls=None, **kwargs):
+        if cls is None:
+            cls = Module
 
-        return type(name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False, **kwargs)
+        return cls(name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False, **kwargs)
 
     def _process_memory(self, subfragment, name):
         m = self._submodule_create(name, subfragment, MemoryModule)
@@ -1298,8 +1294,6 @@ class Module:
 
     def _process_submodule_instance(self, subfragment, name):
         ports = {}
-
-        self.invalid_names.add(subfragment.type)
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(subfragment, name)
@@ -1343,7 +1337,7 @@ class Module:
             if isinstance(subfragment, ir.Instance):
                 submodule, ports = self._process_submodule_instance(subfragment, subname)
             else:
-                submodule = self._submodule_create(subname, subfragment)
+                submodule = self._submodule_create(subname, subfragment, type = f'{self.type}_{subname}')
                 submodule.prepare()
                 ports = None
                 for port in submodule.ports:
@@ -1361,15 +1355,11 @@ class Module:
 
 class InstanceModule(Module):
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
-        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
+        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top, type=fragment.type)
 
     @property
     def parameters(self):
         return {}
-
-    @property
-    def type(self):
-        return self.fragment.type
 
 class MemoryModule(InstanceModule):
 
@@ -1491,8 +1481,8 @@ class MemoryModule(InstanceModule):
                         elems.add(elem)
                         self._signals.pop(elem, None)
 
-                for s in [st.lhs, st.rhs]:
-                    if isinstance(s, ast.Signal) and s in elems:
+                for s in st._lhs_signals() | st._rhs_signals():
+                    if s in elems or s is self._r_en:
                         replace_statements.append((i, None))
                         break
 
