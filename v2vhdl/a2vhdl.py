@@ -866,9 +866,10 @@ class Module:
     def _cleanup_signal_names(self):
         for submodule, _ in self.submodules:
             submodule.name = self.sanitize_module(submodule.name)
-            submodule.type = self.sanitize_module(submodule.type)
             self.invalid_names.add(self._change_case(submodule.name))
             self.invalid_names.add(self._change_case(submodule.type))
+            if not isinstance(submodule, InstanceModule):
+                submodule.type = self.sanitize_module(submodule.type)
 
         extra = set()
         for signal, mapping in self._signals.items():
@@ -1347,8 +1348,6 @@ class Module:
 
                     if port.direction in ['o', 'io']:
                         local_signal.disable_reset_statement()
-
-            # TODO: Maybe rename submodule ports as <submodule.name>__<port_name>
 
             if submodule is not None:
                 self.submodules.append((submodule, ports))
