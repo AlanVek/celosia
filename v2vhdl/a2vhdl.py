@@ -23,7 +23,7 @@ class HDL:
         return ''
 
 class VHDL(HDL):
-    case_sensitive = True
+    case_sensitive = False
 
     protected = [
         'abs',                  'access',         'after',          'alias',          'all',
@@ -116,7 +116,7 @@ class VHDL(HDL):
         pass
 
 class Verilog(HDL):
-    case_sensitive = False
+    case_sensitive = True
     protected = [
         'always',         'and',            'assign',         'begin',
         'buf',            'bufif0',         'bufif1',         'case',
@@ -136,14 +136,15 @@ class Verilog(HDL):
         'pull1',          'pulldown',       'pullup',         'rcmos',
         'real',           'realtime',       'reg',            'release',
         'repeat',         'rnmos',          'rpmos',          'rtran',
-        'rtranif0',       'rtranif1',       'scalared',       'small',
-        'specify',        'specparam',      'strong0',        'strong1',
-        'supply0',        'supply1',        'table',          'task',
-        'time',           'tran',           'tranif0',        'tranif1',
-        'tri',            'tri0',           'tri1',           'triand',
-        'trior',          'trireg',         'vectored',       'wait',
-        'wand',           'weak0',          'weak1',          'while',
-        'wire',           'wor',            'xnor',           'xor',
+        'rtranif0',       'rtranif1',       'scalared',       'signed',
+        'small',          'specify',        'specparam',      'strong0',
+        'strong1',        'supply0',        'supply1',        'table',
+        'task',           'time',           'tran',           'tranif0',
+        'tranif1',        'tri',            'tri0',           'tri1',
+        'triand',         'trior',          'trireg',         'vectored',
+        'wait',           'wand',           'weak0',          'weak1',
+        'while',          'wire',           'wor',            'xnor',
+        'xor',
     ]
 
     template = """module {name} (
@@ -311,33 +312,15 @@ endmodule
             repr = f'{repr}[{cls._parse_rhs(mapping.w_index)}]'
         elif start_idx is not None and stop_idx is not None:
             if start_idx != 0 or stop_idx != len(mapping.signal):
-                size = max(1, stop_idx - start_idx + 1)
-                if stop_idx == start_idx + 1:
+                size = max(1, stop_idx - start_idx)
+                if size == 1:
                     repr = f'{repr}[{start_idx}]'
                 else:
                     repr = f'{repr}[{stop_idx-1}:{start_idx}]'
         elif start_idx is not None or stop_idx is not None:
             raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
 
-        return f'{repr} {symbol} {cls._parse_rhs(cls._fix_rhs_size(statement.rhs, size))}'
-
-    @classmethod
-    def _fix_rhs_size(cls, rhs, size):
-        # TODO: Improve
-
-        if isinstance(rhs, ast.Const):
-            if rhs.width < size:
-                rhs = ast.Const(rhs.value, size)
-            else:
-                rhs = ast.Const(rhs.value & int('1' * size, 2), size)
-
-        elif isinstance(rhs, (ast.Signal, ast.Cat)):
-            if len(rhs) < size:
-                rhs = ast.Cat(rhs, ast.Const(0, size - len(rhs)))
-            else:
-                rhs = rhs[:size]
-
-        return rhs
+        return f'{repr} {symbol} {cls._parse_rhs(statement.rhs)}'
 
     @classmethod
     def _generate_one_block(cls, mapping, module):
@@ -483,7 +466,7 @@ endmodule
         return indent(res, ' '*4)
 
     @classmethod
-    def _parse_rhs(cls, rhs):
+    def _parse_rhs(cls, rhs, allow_signed=True):
         if isinstance(rhs, ast.Const):
             signed = False
             if rhs.value < 0:
@@ -501,7 +484,10 @@ endmodule
             rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
+            signed = allow_signed and rhs.shape().signed
             rhs = rhs.name
+            if signed:
+                rhs = f'$signed({rhs})'
         elif isinstance(rhs, ast.Cat):
             rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1])} }}"
         elif isinstance(rhs, ast.Slice):
@@ -513,17 +499,11 @@ endmodule
                 else:
                     idx = f'{rhs.stop-1}:{rhs.start}'
 
-                if isinstance(rhs.value, ast.Const):
-                    value = rhs.value.value
-                    if value < 0:
-                        value += 2**rhs.value.width
-                    value = format(value, f'0{rhs.value.width}b')[::-1][rhs.start:rhs.stop][::-1]
-                    rhs = cls._parse_rhs(ast.Const(int(value, 2), len(value)))
-                else:
-                    rhs = f"{cls._parse_rhs(rhs.value)}[{idx}]"
+                rhs = f"{cls._parse_rhs(rhs.value, allow_signed=False)}[{idx}]"
 
         elif isinstance(rhs, ast.Operator):
-            parsed = list(map(cls._parse_rhs, rhs.operands))
+            allow_signed = rhs.operator != 'u'
+            parsed = list(map(lambda x: cls._parse_rhs(x, allow_signed=allow_signed), rhs.operands))
             if len(rhs.operands) == 1:
                 p0 = parsed[0]
                 if rhs.operator == '+':
@@ -535,7 +515,7 @@ endmodule
                 elif rhs.operator in ('r|', 'r&', 'r^'):
                     rhs = f'{rhs.operator[-1]} {p0}'
                 elif rhs.operator == "u":
-                    rhs = p0    # TODO: Check
+                    rhs = p0
                 elif rhs.operator == "s":
                     rhs = f'$signed({p0})'
                 else:
@@ -836,9 +816,9 @@ class Module:
             raise RuntimeError(f"Missing signal {signal.name} from module {self.name}")
         return s
 
-    def _new_signal(self, width=1, prefix=None, mapping=Signal, **kwargs):
+    def _new_signal(self, shape=1, prefix=None, mapping=Signal, **kwargs):
         name = prefix or 'tmp'
-        new = ast.Signal(width, name=name)
+        new = ast.Signal(shape, name=name)
         # self._sanitize_signal(new)
         self._signals[new] = mapping(new, **kwargs)
 
@@ -889,14 +869,33 @@ class Module:
                 entry = self._signals[signal] = Signal(signal)
 
             if self.allow_remapping and domain is not None:
-                remap = self._remapped[signal] = self._new_signal(len(signal), prefix = f'{signal.name}_next')
+                remap = self._remapped[signal] = self._new_signal(signal.shape(), prefix = f'{signal.name}_next')
                 entry.add_statement(Assign(remap))
                 self._signals[remap].add_statement(Assign(signal)) # TODO: Avoid duplicates
 
             entry.domain = domain
 
+    @staticmethod
+    def _slice_check_const(rhs, start, stop):
+        if isinstance(rhs, ast.Const):
+            value = rhs.value
+            width = min(rhs.width, stop) - start
+            signed = value < 0
+            if signed:
+                value += 2**rhs.width
+            value = (value >> start) & int('1' * (stop - start), 2)
+            if signed:
+                value -= 2**width
+
+            return ast.Const(value, width)
+
+        else:
+            return rhs[start : stop]
+
     def _process_lhs(self, lhs, rhs, start_idx=None, stop_idx=None):
         res = []
+
+        # TODO: Review start_idx/stop_idx, maybe it's better to use intermediate signals!
 
         if start_idx is None or start_idx < 0:
             start_idx = 0
@@ -908,41 +907,37 @@ class Module:
         elif isinstance(lhs, ast.Signal):
             res.append((lhs, Assign(rhs, start_idx, stop_idx)))
         elif isinstance(lhs, ast.Cat):
-            if len(lhs.parts) == 0:
-                pass
-            # elif len(lhs.parts) == 1:
-            #     res.extend(self._process_lhs(lhs.parts[0], rhs, start_idx, stop_idx))
-            else:
-                offset = 0
-                for part in lhs.parts:
-                    new_start = 0
-                    new_stop = len(part)
+            offset = 0
+            parts = [part for part in lhs.parts if len(part)]
+            for part in parts:
+                new_start = 0
+                new_stop = len(part)
 
-                    if offset + len(part) <= start_idx:
-                        offset += len(part)
-                        continue
-
-                    if offset < start_idx:
-                        new_start = start_idx - offset
-
-                    if offset + len(part) > stop_idx:
-                        new_stop = stop_idx - offset
-
-                    if offset >= len(rhs):
-                        break
-
-                    if offset == 0 and len(part) >= len(rhs):
-                        new_rhs = rhs
-                    else:
-                        new_rhs = rhs[offset : offset + len(part)]
-
-                    res.extend(self._process_lhs(part, new_rhs, new_start, new_stop))
+                if offset + len(part) <= start_idx:
                     offset += len(part)
+                    continue
+
+                if offset < start_idx:
+                    new_start = start_idx - offset
+
+                if offset + len(part) > stop_idx:
+                    new_stop = stop_idx - offset
+
+                if offset >= len(rhs):
+                    break
+
+                if offset == 0 and len(part) >= len(rhs):
+                    new_rhs = rhs
+                else:
+                    new_rhs = self._slice_check_const(rhs, offset, offset + len(part))
+
+                res.extend(self._process_lhs(part, new_rhs, new_start, new_stop))
+                offset += len(part)
 
         elif isinstance(lhs, ast.Slice):
             if lhs.start < lhs.stop:
                 start = start_idx+lhs.start
-                res.extend(self._process_lhs(lhs.value, rhs, start_idx=start, stop_idx=start+min(stop_idx, lhs.stop)))
+                res.extend(self._process_lhs(lhs.value, rhs, start_idx=start, stop_idx=min(start+stop_idx, lhs.stop)))
 
         elif isinstance(lhs, ast.Part):
             if isinstance(lhs.offset, ast.Const):
@@ -990,14 +985,16 @@ class Module:
             if rhs not in self._signals:
                 # self._sanitize_signal(rhs)
                 self._signals[rhs] = Signal(rhs)
+
         elif isinstance(rhs, ast.Cat):
-            if len(rhs.parts) == 0:
+            parts = [part for part in rhs.parts if len(part)]
+            if len(parts) == 0:
                 rhs = self._zero_size_signal()
-            elif len(rhs.parts) == 1:
-                rhs = self._process_rhs(rhs.parts[0])
+            elif len(parts) == 1:
+                rhs = self._process_rhs(parts[0])
             else:
-                new_rhs = self._new_signal(len(rhs), prefix='concat')
-                rhs.parts = [self._process_rhs(part) for part in rhs.parts if len(part)]
+                new_rhs = self._new_signal(rhs.shape(), prefix='concat')
+                rhs.parts = [self._process_rhs(part) for part in parts if len(part)]
 
                 self._add_new_assign(new_rhs, rhs)
                 rhs = new_rhs
@@ -1010,13 +1007,15 @@ class Module:
 
                 if rhs.start == 0 and rhs.stop >= len(rhs.value):
                     rhs = rhs.value
+                elif isinstance(rhs.value, ast.Const):
+                    rhs = self._slice_check_const(rhs.value, rhs.start, rhs.stop)
                 else:
-                    new_rhs = self._new_signal(len(rhs), prefix='slice')
+                    new_rhs = self._new_signal(rhs.shape(), prefix='slice')
                     self._add_new_assign(new_rhs, rhs)
                     rhs = new_rhs
 
         elif isinstance(rhs, ast.Operator):
-            new_rhs = self._new_signal(len(rhs), prefix='operand')
+            new_rhs = self._new_signal(rhs.shape(), prefix='operand')
             for i, operand in enumerate(rhs.operands):
                 rhs.operands[i] = self._process_rhs(operand)
 
@@ -1030,7 +1029,7 @@ class Module:
                 rhs.value = self._process_rhs(rhs.value)
 
                 if rhs.stride == 1:
-                    new_rhs = self._new_signal(rhs.width, prefix='part')
+                    new_rhs = self._new_signal(rhs.shape(), prefix='part')
                     rhs.offset = self._process_rhs(rhs.offset)
                     self._add_new_assign(new_rhs, rhs)
                 else:
@@ -1049,7 +1048,7 @@ class Module:
 
                 rhs.index = self._process_rhs(rhs.index)
 
-                new_rhs = self._new_signal(max(len(elem) for elem in rhs.elems), prefix='array')
+                new_rhs = self._new_signal(rhs.shape(), prefix='array')
 
                 index = self._process_rhs(rhs.index)
                 cases = {
@@ -1065,6 +1064,48 @@ class Module:
             raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
 
         return rhs
+
+    def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True):
+
+        if isinstance(rhs, ast.Const):
+            if rhs.width < size:
+                rhs = ast.Const(rhs.value, size)
+            elif _allow_downsize:
+                rhs = ast.Const(rhs.value & int('1' * size, 2), size)   # TODO: Check negative
+
+        else:
+            if _check_signed and rhs.shape().signed:
+                new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'signed')
+                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize))
+                return new_rhs
+
+            if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
+                if len(rhs) < size:
+                    new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'expanded')
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, len(rhs), _check_signed=False, _allow_downsize=_allow_downsize)) # TODO: _Check check_signed
+                    rhs = new_rhs
+                elif _allow_downsize and size > len(rhs):
+                    rhs = rhs[:size]
+
+            elif isinstance(rhs, ast.Operator):
+                operands = rhs.operands
+                if len(rhs.operands) == 1:
+                    rhs.operands = [self._fix_rhs_size(rhs.operands[0], size, _allow_downsize=_allow_downsize)]
+                else:
+                    max_size = max(size, max(len(op) for op in operands))
+                    # TODO: Some operations (like logical operations) can be downsized!
+                    if len(rhs.operands) == 2:
+                        rhs.operands = [self._fix_rhs_size(op, max_size, _allow_downsize=False) for op in operands]
+                    elif len(rhs.operands) == 3:
+                        rhs.operands = [operands[0]] + [self._fix_rhs_size(op, max_size, _allow_downsize=False) for op in operands[1:]]
+                    else:
+                        raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
+            else:
+                raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
+
+        ret = self._process_rhs(rhs)
+        return ret
 
     def _open_switch(self, test, cases):
         res = []
@@ -1085,7 +1126,7 @@ class Module:
         return res
 
     def _process_assign(self, assign: ast.Assign):
-        return self._process_lhs(assign.lhs, self._process_rhs(assign.rhs))
+        return self._process_lhs(assign.lhs, self._process_rhs(self._fix_rhs_size(assign.rhs, len(assign.lhs))))
 
     def _process_switch(self, switch: ast.Switch):
         cases = {}
@@ -1127,7 +1168,6 @@ class Module:
 
         for signal, mapping in m._signals.items():
 
-            # TODO: Make it so that the memory is read only once using Amaranth's __0__
             if mapping is m._mem:
                 # self._sanitize_signal(signal)
                 self._signals[signal] = mapping
@@ -1163,7 +1203,7 @@ class Module:
                     ):
                         ports[port_name] = port_value
                     else:
-                        new_port = self._new_signal(len(port_value), prefix=f'port_{port_name}')
+                        new_port = self._new_signal(port_value.shape(), prefix=f'port_{port_name}')
                         ports[port_name] = new_port
                         if kind == 'i':
                             self._execute_statements([new_port.eq(port_value)])
@@ -1281,7 +1321,7 @@ class MemoryModule(Module):
         # TODO: Handle multi-port and granularity!!!
 
         self._mem = self._signals[self._new_signal(
-            width   = self._width,
+            shape   = self._width,
             prefix  = self.name,
             mapping = Memory,
             domain  = None if self._wdom is None else self._wdom.name,
@@ -1291,7 +1331,7 @@ class MemoryModule(Module):
         )]
 
         if self._has_read:
-            self._read_proxy = self._new_signal(width = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
+            self._read_proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
             self._add_new_statement(self._read_proxy, Assign(self._mem))
 
         self._update_statements(self.fragment.statements)
