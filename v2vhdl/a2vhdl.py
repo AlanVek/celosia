@@ -468,9 +468,10 @@ endmodule
     def _parse_rhs(cls, rhs, allow_signed=True):
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
-            if rhs.value < 0:
-                rhs.value += 2**rhs.width
-            rhs = f"{max(1, rhs.width)}'h{hex(rhs.value)[2:]}"
+            value = rhs.value
+            if value < 0:
+                value += 2**rhs.width
+            rhs = f"{max(1, rhs.width)}'h{hex(value)[2:]}"
             if signed:
                 rhs = f'$signed({rhs})'
 
@@ -964,12 +965,12 @@ class Module:
         if isinstance(rhs, ast.Const):
             value = rhs.value
             width = min(rhs.width, stop) - start
-            signed = rhs.signed
+            # signed = rhs.signed
             if rhs.value < 0:
                 value += 2**rhs.width
             value = (value >> start) & int('1' * (stop - start), 2)
-            if signed:
-                value -= 2**width
+            # if signed:
+            #     value -= 2**width
 
             return ast.Const(value, width)
 
@@ -1176,6 +1177,7 @@ class Module:
                 signed_divisor = divisor
             else:
                 signed_divisor = divisor.as_signed()
+
             new_divisor = self._fix_rhs_size(signed_divisor, max_size, _check_signed=False)
 
             dividend = self._process_rhs(ast.Mux(
@@ -1190,19 +1192,21 @@ class Module:
     def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True, _force_sign=None):
         if isinstance(rhs, ast.Const):
 
+            signed = rhs.signed
             new_value = rhs.value
 
             if _allow_downsize and rhs.width > size:
-                new_value = new_value & ((1 << size) - 1)   # TODO: Check negative
+                if signed:
+                    new_value += 2**rhs.width
+                new_value = new_value & ((1 << size) - 1)
+                signed = False  # TODO: Check (slicing sloses sign)
 
             if _force_sign is not None:
-                signed = new_value < 0
-                if _force_sign and not signed:
-                    new_value -= 2**size
-                elif not _force_sign and signed:
-                    new_value += 2**size
+                # if _force_sign != signed:
+                #     new_value = -new_value
+                signed = _force_sign
 
-            rhs = ast.Const(new_value, size)
+            rhs = ast.Const(new_value, ast.Shape(size, signed))
 
         else:
             signed = rhs.shape().signed
