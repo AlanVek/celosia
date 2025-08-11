@@ -141,7 +141,8 @@ class Verilog(HDL):
         'strong1',        'supply0',        'supply1',        'table',
         'task',           'time',           'tran',           'tranif0',
         'tranif1',        'tri',            'tri0',           'tri1',
-        'triand',         'trior',          'trireg',         'vectored',
+        'triand',         'trior',          'trireg',         'unsigned',
+        'vectored',
         'wait',           'wand',           'weak0',          'weak1',
         'while',          'wire',           'wor',            'xnor',
         'xor',
@@ -1113,9 +1114,9 @@ class Module:
 
             if not _division_fix and rhs.operator == '//' and len(rhs.operands) == 2:
                 dividend, divisor = self._signed_division_fix(rhs)
-                kwargs = kwargs.copy()
                 kwargs['_division_fix'] = True
                 new_rhs = self._process_rhs(ast.Mux(divisor == ast.Const(0, len(divisor)), ast.Const(0, len(rhs)), dividend//divisor), **kwargs)
+
             else:
                 new_rhs = self._new_signal(rhs.shape(), prefix='operand')
                 self._add_new_assign(new_rhs, rhs)
@@ -1162,44 +1163,44 @@ class Module:
     def _signed_division_fix(self, rhs):
         dividend, divisor = rhs.operands
 
-        # Yosys fix for signed division
-        if any(operand.shape().signed for operand in (divisor, dividend)):
-            max_size = max(len(dividend), len(divisor)) + 2
+        if any(operand.shape().signed for operand in rhs.operands):
+            max_size = max(len(op) for op in rhs.operands) + 2
 
-            if dividend.shape().signed:
-                signed_dividend = dividend
-            else:
-                signed_dividend = dividend.as_signed()
+            if not dividend.shape().signed:
+                dividend = dividend.as_signed()
 
-            new_dividend = self._fix_rhs_size(signed_dividend, max_size, _check_signed=False)
+            if not divisor.shape().signed:
+                divisor = divisor.as_signed()
 
-            if divisor.shape().signed:
-                signed_divisor = divisor
-            else:
-                signed_divisor = divisor.as_signed()
+            dividend = self._fix_rhs_size(dividend, max_size)
+            divisor = self._fix_rhs_size(divisor, max_size)
 
-            new_divisor = self._fix_rhs_size(signed_divisor, max_size, _check_signed=False)
-
+            # Yosys fix for signed division
             dividend = self._process_rhs(ast.Mux(
-                (new_dividend[-1] == new_divisor[-1]) | (new_dividend == ast.Const(0, len(new_dividend))),
-                new_dividend,
-                new_dividend - ast.Mux(new_divisor[-1], new_divisor + ast.Const(1, len(new_divisor)), new_divisor - ast.Const(1, len(new_divisor)))
+                (dividend[-1] == divisor[-1]) | (dividend == ast.Const(0, len(dividend))),
+                dividend,
+                dividend - ast.Mux(divisor[-1], divisor + ast.Const(1, len(divisor)), divisor - ast.Const(1, len(divisor)))
             ))
-            divisor = new_divisor
 
         return dividend, divisor
 
-    def _fix_rhs_size(self, rhs, size, *, _allow_downsize=True, _check_signed=True, _force_sign=None):
+    def _fix_rhs_size(self, rhs, size=None, *, _force_sign=None):
+        if size is None:
+            size = len(rhs)
+
         if isinstance(rhs, ast.Const):
 
             signed = rhs.signed
             new_value = rhs.value
 
-            if _allow_downsize and rhs.width > size:
+            # Downsize
+            ################################
+            if rhs.width > size:
                 if signed:
                     new_value += 2**rhs.width
                 new_value = new_value & ((1 << size) - 1)
-                signed = False  # TODO: Check (slicing sloses sign)
+                signed = False
+            ################################
 
             if _force_sign is not None:
                 # if _force_sign != signed:
@@ -1213,76 +1214,71 @@ class Module:
             if _force_sign is not None:
                 if _force_sign and not signed:
                     new_rhs = self._new_signal(ast.signed(size), prefix = 'signed')
-                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize, _force_sign=None))
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
                     return new_rhs
                 elif not _force_sign and signed:
                     new_rhs = self._new_signal(size, prefix = 'unsigned')
-                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize, _force_sign=None))
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
                     return new_rhs
-
-            if _check_signed and signed:    # TODO: Maybe exclude signals?
-                new_rhs = self._new_signal(ast.signed(size), prefix = 'signed')
-                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size, _check_signed=False, _allow_downsize=_allow_downsize, _force_sign=_force_sign))
-                return new_rhs
 
             if isinstance(rhs, ast.Cat):
                 for i, part in enumerate(rhs.parts):
-                    rhs.parts[i] = self._fix_rhs_size(part, len(part), _allow_downsize=False)
+                    rhs.parts[i] = self._fix_rhs_size(part)
             elif isinstance(rhs, ast.Slice):
-                rhs.value = self._fix_rhs_size(rhs.value, len(rhs.value), _allow_downsize=False)
+                rhs.value = self._fix_rhs_size(rhs.value)
             elif isinstance(rhs, ast.Part):
-                rhs.offset = self._fix_rhs_size(rhs.offset, len(rhs.offset), _allow_downsize=False)
-                rhs.value = self._fix_rhs_size(rhs.value, len(rhs.value), _allow_downsize=False)
+                rhs.offset = self._fix_rhs_size(rhs.offset)
+                rhs.value = self._fix_rhs_size(rhs.value)
             elif isinstance(rhs, ast.ArrayProxy):
-                rhs.index = self._fix_rhs_size(rhs.index, len(rhs.index), _allow_downsize=False)
+                rhs.index = self._fix_rhs_size(rhs.index)
                 for i, elem in enumerate(rhs.elems):
-                    rhs.elems[i] = self._fix_rhs_size(elem, len(elem), _allow_downsize=False)
+                    rhs.elems[i] = self._fix_rhs_size(elem)
 
             if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
-                if isinstance(rhs, (ast.Cat, ast.Slice, ast.Part)):
-                    signed = False  # Cat, Slice and Part don't preserve sign!
-                else:
-                    signed = rhs.shape().signed
+                signed = rhs.shape().signed
                 if len(rhs) < size:
                     new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded')
-                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, len(rhs), _check_signed=False, _allow_downsize=_allow_downsize)) # TODO: _Check check_signed
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs))
                     rhs = new_rhs
-                elif _allow_downsize and len(rhs) > size:
-                    rhs = self._fix_rhs_size(rhs[:size], size=size, _check_signed=False, _allow_downsize=_allow_downsize)
+                elif len(rhs) > size:
+                    rhs = self._fix_rhs_size(rhs[:size])
 
             elif isinstance(rhs, ast.Operator):
                 operands = rhs.operands
+                max_size = max(size, max(len(op) for op in operands))
+
                 if len(operands) == 1:
-                    if rhs.operator in ('b', 'r|', 'r&', 'r^'):
-                        _allow_downsize = False
-                    rhs.operands = [self._fix_rhs_size(operands[0], size, _allow_downsize=_allow_downsize)]
-                else:
-                    if len(operands) == 2:
-                        if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|', '<', '<=', '==', '!=', '>', '>='):
-                            max_size = max(size, max(len(op) for op in operands))
-                            signed = any(op.shape().signed for op in operands)
-                            rhs.operands = [self._fix_rhs_size(op, max_size, _allow_downsize=False, _force_sign=signed) for op in operands]
-                        elif rhs.operator in ('<<', '>>'):
-                            max_size = max(size, len(operands[0]))
-                            rhs.operands = [
-                                self._fix_rhs_size(operands[0], max_size, _allow_downsize=False),
-                                self._fix_rhs_size(operands[1], len(operands[1]), _allow_downsize=False, _force_sign=False),
-                            ]
-                    elif len(operands) == 3:
-                        max_size = max(size, max(len(op) for op in operands))
-                        signed = any(op.shape().signed for op in operands[1:])
+                    if rhs.operator == 'u':
+                        _force_sign = False
+                    elif rhs.operator == 's':
+                        _force_sign = True
+                    rhs.operands = [self._fix_rhs_size(operands[0], max_size, _force_sign=_force_sign)]
+
+                elif len(operands) == 2:
+                    if rhs.operator in ('<<', '>>'):
+                        max_size = max(size, len(operands[0]))
                         rhs.operands = [
-                            self._fix_rhs_size(operands[0], len(operands[0]), _allow_downsize=False),
-                            *[self._fix_rhs_size(op, max_size, _allow_downsize=False, _force_sign=signed) for op in operands[1:]]
+                            self._fix_rhs_size(operands[0], max_size),
+                            self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
                     else:
-                        raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+                        max_size = max(size, max(len(op) for op in operands))
+                        signed = any(op.shape().signed for op in operands)
+                        rhs.operands = [self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands]
+
+                elif len(operands) == 3:
+                    signed = any(op.shape().signed for op in operands[1:])
+                    rhs.operands = [
+                        self._fix_rhs_size(operands[0]),
+                        *[self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands[1:]]
+                    ]
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
             else:
                 raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
 
-        ret = self._process_rhs(rhs)
-        return ret
+        return self._process_rhs(rhs)
 
     def _open_switch(self, test, cases):
         res = []
@@ -1309,7 +1305,7 @@ class Module:
         return res
 
     def _process_assign(self, assign: ast.Assign):
-        return self._process_lhs(assign.lhs, self._process_rhs(self._fix_rhs_size(assign.rhs, len(assign.lhs))))
+        return self._process_lhs(assign.lhs, self._fix_rhs_size(assign.rhs, len(assign.lhs)))
 
     def _process_switch(self, switch: ast.Switch):
         cases = {}
