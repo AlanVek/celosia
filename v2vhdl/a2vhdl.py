@@ -304,7 +304,6 @@ endmodule
         start_idx = statement._start_idx
         stop_idx = statement._stop_idx
 
-        # TODO: Validate rhs size == lhs size or take slice
         repr = mapping.signal.name
 
         size = len(mapping.signal)
@@ -414,7 +413,7 @@ endmodule
             if statements:
                 case_body = cls._generate_statements(mapping, statements, symbol=symbol)
             else:
-                case_body = '/* empty */;\n'    # TODO: Filter empty cases when possible
+                case_body = '/* empty */;\n'
 
             body += indent(case_body, ' '*8) + end
 
@@ -760,7 +759,7 @@ class Switch(Statement):
 
 class Module:
 
-    allow_remapping = False
+    allow_remapping = True  # Not strictly necessary, but cocotb needs it to force-assign some signals
 
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True, type = None):
         if invalid_names is None:
@@ -864,19 +863,17 @@ class Module:
             self.invalid_names.clear()
 
     def _cleanup_signal_names(self):
-        if self.top:
-            extra_ports = set()
-        else:
-            extra_ports = set(port.signal.name for port in self.ports)
+        extra = set()
+        if not self.top:
+            extra.update(port.signal.name for port in self.ports)
 
         for submodule, _ in self.submodules:
-            submodule.name = self.sanitize_module(submodule.name, extra=extra_ports)
-            self.invalid_names.add(self._change_case(submodule.name))
+            submodule.name = self.sanitize_module(submodule.name, extra=extra)
+            extra.add(self._change_case(submodule.name))
             if not isinstance(submodule, InstanceModule):
-                submodule.type = self.sanitize_module(submodule.type, extra=extra_ports)
+                submodule.type = self.sanitize_module(submodule.type, extra=extra)
             self.invalid_names.add(self._change_case(submodule.type))
 
-        extra = set()
         for signal, mapping in self._signals.items():
             if self.top or not isinstance(mapping, Port):
                 self._sanitize_signal(signal, extra=extra)
@@ -947,7 +944,16 @@ class Module:
 
             if self.allow_remapping and domain is not None:
                 remap = self._remapped[signal] = self._new_signal(signal.shape(), prefix = f'{signal.name}_next')
-                entry.add_statement(Assign(remap))
+
+                # For some reason, cocotb needs rst duplication in comb and sync parts
+                if self.domains[domain].rst is None:
+                    entry.add_statement(Assign(remap))
+                else:
+                    entry.add_statement(Switch(self.domains[domain].rst, {
+                        '0': [Assign(remap)],
+                        '1': [Assign(ast.Const(signal.reset, len(signal)))]
+                    }))
+
                 self._signals[remap].add_statement(Assign(signal)) # TODO: Avoid duplicates
 
             entry.domain = domain
@@ -1057,6 +1063,9 @@ class Module:
     def _process_rhs(self, rhs):
         # TODO: Possibly check if return value differs input value to determine whether a new signal is needed
         # so we can reduce code size
+
+        # TODO: Possibly receive a "top" parameter, so that the first layer doesn't need to create a new signal
+        # For example: assign x = Cat(Slice, Part) ---> x = Cat(new_slice, new_part) instead of x = new_signal_for_cat
 
         if isinstance(rhs, ast.Const):
             pass
@@ -1452,12 +1461,16 @@ class MemoryModule(InstanceModule):
 
         if self._has_read:
             self._read_proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
-            self._add_new_statement(self._read_proxy, Assign(self._mem))
+            if self._rdom is None:  # TODO: Also here if r_en is never assigned by parent module
+                self._add_new_statement(self._read_proxy, Assign(self._mem))
+                self._signals.pop(self._r_en, None)
+            else:
+                self._add_new_statement(self._read_proxy, Switch(self._r_en, {'1': [Assign(self._mem)]}))
 
         self._update_statements(self.fragment.statements)
 
     def _update_statements(self, statements, rst_cond = False, elems = None):
-        replace_statements = []
+        replace_statements = {}
         if elems is None:
             elems = ast.SignalSet()
 
@@ -1472,7 +1485,7 @@ class MemoryModule(InstanceModule):
                     arr = st.lhs
                     st.lhs = self._mem.signal
                     if rst_cond:
-                        replace_statements.append((i, None))
+                        replace_statements[i] = None
                 elif isinstance(st.rhs, ast.ArrayProxy):
                     if not self._has_read:
                         raise RuntimeError(f"Write-only memory {self.name} at right hand side is invalid!")
@@ -1487,7 +1500,7 @@ class MemoryModule(InstanceModule):
 
                 for s in st._lhs_signals() | st._rhs_signals():
                     if s in elems or s is self._r_en:
-                        replace_statements.append((i, None))
+                        replace_statements[i] = None
                         break
 
             elif isinstance(st, ast.Switch):
@@ -1495,15 +1508,14 @@ class MemoryModule(InstanceModule):
                     assert [('1',)] == list(st.cases), f"Invalid memory statement for module {self.name}"
                     new_list = st.cases[('1',)]
                     self._update_statements(new_list, elems=elems)
-                    replace_statements.append((i, ast._StatementList(new_list)))
+                    replace_statements[i] = ast._StatementList(new_list)
                 else:
                     rst_cond = (self._rdom is not None and st.test is self._rdom.rst) or (self._wdom is not None and st.test is self._wdom.rst)
                     for stmts in st.cases.values():
                         self._update_statements(stmts, rst_cond=rst_cond, elems=elems)
 
-        for i, new in reversed(replace_statements):
+        for i, new in reversed(replace_statements.items()):
             if new is None:
                 statements.pop(i)
             else:
                 statements[i] = new
-
