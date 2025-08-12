@@ -674,51 +674,20 @@ class Switch(Statement):
         return set(tmp)
 
     def strip_unused_cases(self):
-        # import fnmatch
-        # patterns = []
-        # pops = []
-        # for case, statements in reversed(self.cases.items()):
-        #     if case is None:
-        #         case = '?' * len(self.test)
-        #     if not statements:
-        #         for c in patterns:
-        #             mask = case
-        #             for i in range(len(c)):
-        #                 if c[i] == '?':
-        #                     mask = mask[:i] + '?' + mask[1+i:]
-        #             if fnmatch.fnmatch(c, mask):
-        #                 break
-        #         else:
-        #             pops.append(case)
-        #     else:
-        #         patterns.append(case)
-
-        # for pop in pops:
-        #     self.cases.pop(pop)
-
-        # return
-        # TODO: Switch to mask-based matches to avoid overhead
-
-        has_default = self.cases.get(None, None) is not None
-
-        patterns = {
-            case: self._get_matching_patterns(case) for case in self.cases if case is not None
-        }
-        if has_default:
-            patterns[None] = set()
-            for i in range(2**len(self.test)):
-                patterns[None].add(format(i, f'0{len(self.test)}b'))
-
-        before = set()
+        patterns = []
         pops = []
-
         for case, statements in reversed(self.cases.items()):
-            curr_matches = patterns[case]
+            mask = case
+            if case is None:
+                mask = '?' * len(self.test)
             if not statements:
-                if curr_matches.isdisjoint(before):
+                for pattern in patterns:
+                    if all(p == c or p == '?' or c == '?' for p, c in zip(pattern, mask)):
+                        break
+                else:
                     pops.append(case)
             else:
-                before.update(curr_matches)
+                patterns.append(mask)
 
         for pop in pops:
             self.cases.pop(pop)
@@ -1440,7 +1409,7 @@ class MemoryModule(InstanceModule):
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
 
-        self._mem = self._read_proxy = None
+        self._mem = self._read_proxy = self._arr = self._read_comb = None
 
         self._has_read = fragment.parameters.get('RD_CLK_ENABLE', ast.Const(0, 1)).value
         if self._has_read:
@@ -1460,10 +1429,15 @@ class MemoryModule(InstanceModule):
 
             r_en = fragment.named_ports.get('RD_EN', None)
             if r_en is None:
-                raise RuntimeError(f"Missing write enable for memory {self.name}")
+                raise RuntimeError(f"Missing read enable for memory {self.name}")
             self._r_en = self._process_rhs(r_en[0])
+
+            r_data = fragment.named_ports.get('RD_DATA', None)
+            if r_data is None:
+                raise RuntimeError(f"Missing read data for memory {self.name}")
+            self._r_data = self._process_rhs(r_data[0])
         else:
-            self._rdom = self._rindex = None
+            self._rdom = self._rindex = self._r_en = self._r_data = None
 
         self._has_write = fragment.parameters.get('WR_CLK_ENABLE', ast.Const(0, 1)).value
         if self._has_write:
@@ -1482,7 +1456,7 @@ class MemoryModule(InstanceModule):
             self._w_en = self._process_rhs(w_en[0])
 
         else:
-            self._wdom = self._windex = None
+            self._wdom = self._windex = self._w_en = None
 
         self._width = fragment.parameters.get('WIDTH', None)
         if self._width is None:
@@ -1519,59 +1493,66 @@ class MemoryModule(InstanceModule):
         )]
 
         if self._has_read:
-            self._read_proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_rdata', domain = self._rdom.name)
+            self._read_comb = self._new_signal(shape = self._width, prefix = f'{self.name}_comb')
+
             if self._rdom is None:  # TODO: Also here if r_en is never assigned by parent module
-                self._add_new_statement(self._read_proxy, Assign(self._mem))
+                self._read_proxy = self._read_comb
                 self._signals.pop(self._r_en, None)
             else:
-                self._add_new_statement(self._read_proxy, Switch(self._r_en, {'1': [Assign(self._mem)]}))
+                self._read_proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_r_data', domain=self._rdom.name)
+
+            self._add_new_statement(self._read_comb, Assign(self._mem))
+            self._add_new_statement(self._r_data, Assign(self._read_proxy))
 
         self._update_statements(self.fragment.statements)
 
+    def _reset(self):
+        super()._reset()
+        self._arr = None
+
+    def _set_arr(self, arr):
+        if self._arr is not None:
+            return
+
+        self._arr = ast.SignalSet(arr.elems)
+        for signal in arr.elems:
+            self._signals.pop(signal, None)
+
+    def _process_rhs(self, rhs, **kwargs):
+        if isinstance(rhs, ast.ArrayProxy):
+            self._set_arr(rhs)
+            return self._read_comb
+
+        return super()._process_rhs(rhs, **kwargs)
+
+    def _process_lhs(self, lhs, rhs, start_idx=None, stop_idx=None):
+        if isinstance(lhs, ast.ArrayProxy):
+            self._set_arr(lhs)
+            return [(self._mem.signal, Assign(rhs))]
+
+        elif isinstance(lhs, ast.Signal) and self._arr is not None and lhs in self._arr:
+            return []
+
+        elif lhs is self._r_data:
+            return [(self._read_proxy, Assign(rhs))]
+
+        return super()._process_lhs(lhs, rhs, start_idx, stop_idx)
+
     def _update_statements(self, statements, rst_cond = False, elems = None):
         replace_statements = {}
-        if elems is None:
-            elems = ast.SignalSet()
 
         for i, st in enumerate(statements):
-            if isinstance(st, ast.Assign):
-                arr = None
-                if isinstance(st.lhs, ast.ArrayProxy):
+            if not isinstance(st, ast.Switch):
+                continue
 
-                    if not self._has_write:
-                        raise RuntimeError(f"Read-only memory {self.name} at left hand side is invalid!")
+            if st.test is self._r_en and self._rdom is None:
+                assert [('1',)] == list(st.cases), f"Invalid memory statement for module {self.name}"
+                replace_statements[i] = ast._StatementList(st.cases[('1',)])
 
-                    arr = st.lhs
-                    st.lhs = self._mem.signal
-                    if rst_cond:
-                        replace_statements[i] = None
-                elif isinstance(st.rhs, ast.ArrayProxy):
-                    if not self._has_read:
-                        raise RuntimeError(f"Write-only memory {self.name} at right hand side is invalid!")
-
-                    arr = st.rhs
-                    st.rhs = self._read_proxy
-
-                if arr is not None:
-                    for elem in arr.elems:
-                        elems.add(elem)
-                        self._signals.pop(elem, None)
-
-                for s in st._lhs_signals() | st._rhs_signals():
-                    if s in elems or s is self._r_en:
-                        replace_statements[i] = None
-                        break
-
-            elif isinstance(st, ast.Switch):
-                if st.test is self._r_en:
-                    assert [('1',)] == list(st.cases), f"Invalid memory statement for module {self.name}"
-                    new_list = st.cases[('1',)]
-                    self._update_statements(new_list, elems=elems)
-                    replace_statements[i] = ast._StatementList(new_list)
-                else:
-                    rst_cond = (self._rdom is not None and st.test is self._rdom.rst) or (self._wdom is not None and st.test is self._wdom.rst)
-                    for stmts in st.cases.values():
-                        self._update_statements(stmts, rst_cond=rst_cond, elems=elems)
+            else:
+                rst_cond = (self._rdom is not None and st.test is self._rdom.rst) or (self._wdom is not None and st.test is self._wdom.rst)
+                if rst_cond:
+                    replace_statements[i] = None
 
         for i, new in reversed(replace_statements.items()):
             if new is None:
