@@ -1400,7 +1400,7 @@ class InstanceModule(Module):
 
     @property
     def parameters(self):
-        return {}
+        return self.fragment.parameters
 
 class MemoryModule(InstanceModule):
 
