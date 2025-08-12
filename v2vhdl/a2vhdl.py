@@ -993,32 +993,33 @@ class Module:
         elif isinstance(lhs, ast.Signal):
             res.append((lhs, Assign(rhs, start_idx, stop_idx)))
         elif isinstance(lhs, ast.Cat):
-            offset = 0
+            loffset = roffset = 0
             parts = [part for part in lhs.parts if len(part)]
             for part in parts:
                 new_start = 0
                 new_stop = len(part)
 
-                if offset + len(part) <= start_idx:
-                    offset += len(part)
+                if loffset + len(part) <= start_idx:
+                    loffset += len(part)
                     continue
 
-                if offset < start_idx:
-                    new_start = start_idx - offset
+                if loffset < start_idx:
+                    new_start = start_idx - loffset
 
-                if offset + len(part) > stop_idx:
-                    new_stop = stop_idx - offset
+                if loffset + len(part) > stop_idx:
+                    new_stop = stop_idx - loffset
 
-                if offset >= len(rhs):
+                if roffset >= len(rhs):
                     break
 
-                if offset == 0 and len(part) >= len(rhs):
+                if roffset == 0 and len(part) >= len(rhs):
                     new_rhs = rhs
                 else:
-                    new_rhs = self._slice_check_const(rhs, offset, offset + len(part))
+                    new_rhs = self._slice_check_const(rhs, roffset, roffset + len(part))
 
                 res.extend(self._process_lhs(part, new_rhs, new_start, new_stop))
-                offset += len(part)
+                loffset += len(part)
+                roffset += len(part)
 
         elif isinstance(lhs, ast.Slice):
             if lhs.start < lhs.stop:
