@@ -1189,6 +1189,10 @@ class Module:
         if size is None:
             size = len(rhs)
 
+        # Fix: Zero-width signals!
+        if len(rhs) == 0 and size > 0:
+            rhs = ast.Const(0, size)
+
         if isinstance(rhs, ast.Const):
 
             signed = rhs.signed
