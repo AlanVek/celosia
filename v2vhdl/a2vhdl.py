@@ -200,32 +200,35 @@ endmodule
         port_block, initial_block, assignment_block, blocks_block = cls._parse_signals(module)
         submodules_block = cls._generate_submodule_blocks(module)
 
-        res = cls.template.format(
+        res = [cls.template.format(
             name = module.type,
             port_block = port_block,
             initials_block = initial_block,
             assignment_block = assignment_block,
             submodules_block = submodules_block,
             blocks_block = blocks_block,
-        )
+        )]
         for submodule, _ in module.submodules:
             if isinstance(submodule, InstanceModule):
                 continue
-            res += '\n' + cls._convert_module(submodule)
+            res.append(cls._convert_module(submodule))
 
-        return res
+        return '\n'.join(res)
 
     @classmethod
     def _parse_signals(cls, module):
-        port_block = initial_block = assignment_block = blocks_block = ''
+        port_block = []
+        initial_block = []
+        assignment_block = []
+        blocks_block = []
 
         for mapping in module._signals.values():
             if not len(mapping.signal):
                 continue
 
-            initial_block += cls._generate_initial(mapping)
+            initial_block.append(cls._generate_initial(mapping))
             if isinstance(mapping, Port):
-                port_block += f'{cls._generate_one_port(mapping)},\n'
+                port_block.append(f'{cls._generate_one_port(mapping)}')
 
                 if mapping.direction == 'i':
                     continue
@@ -237,11 +240,14 @@ endmodule
                     statement = mapping.reset_statement
                 else:
                     continue
-                assignment_block += f'assign {cls._generate_one_assignment(mapping, statement, symbol="=")};\n'
+                assignment_block.append(f'assign {cls._generate_one_assignment(mapping, statement, symbol="=")};')
             else:
-                blocks_block += f'{cls._generate_one_block(mapping, module)}'
+                blocks_block.append(f'{cls._generate_one_block(mapping, module)}')
 
-        port_block = port_block[:-2]
+        port_block = ',\n'.join(port_block)
+        initial_block = '\n'.join(initial_block)
+        assignment_block = '\n'.join(assignment_block)
+        blocks_block = '\n'.join(blocks_block)
         blocks = (port_block, initial_block, assignment_block, blocks_block)
         return (indent(block, ' '*4) for block in blocks)
 
@@ -274,13 +280,13 @@ endmodule
             res += f'{dir}{type} {cls._generate_one_signal(mapping)}'
             if reset is not None:
                 res += f' = {reset}'
-            res += ';\n'
+            res += ';'
 
         if isinstance(mapping, Memory):
-            res += 'initial begin\n'
+            res += '\ninitial begin\n'
             for i, reset in enumerate(mapping.init):
                 res += f'    {mapping.signal.name}[{i}] = {cls._parse_rhs(reset)};\n'
-            res += 'end\n'
+            res += 'end'
 
         return res
 
@@ -364,32 +370,32 @@ endmodule
             symbol = '<='
 
         header = f'always @{triggers} begin'
-        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol)[:-1], ' '*4)
+        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol), ' '*4)
         footer = 'end'
 
         return dedent(f"{header}\n{blocks}\n{footer}\n")
 
     @classmethod
     def _generate_statements(cls, mapping, statements, symbol):
-        res = ''
+        res = []
         for statement in statements:
-            res += cls._generate_one_statement(mapping, statement, symbol)
-        return res
+            res.append(cls._generate_one_statement(mapping, statement, symbol))
+        return '\n'.join(res)
 
     @classmethod
     def _generate_one_statement(cls, mapping, statement, symbol):
-        res = ''
+        res = []
 
         if isinstance(statement, Assign):
-            res += f"{cls._generate_one_assignment(mapping, statement, symbol=symbol)};\n"
+            res.append(f"{cls._generate_one_assignment(mapping, statement, symbol=symbol)};")
 
         elif isinstance(statement, Switch):
-            res += f"{cls._generate_switch(mapping, statement, symbol=symbol)}"
+            res.append(f"{cls._generate_switch(mapping, statement, symbol=symbol)}")
 
         else:
             raise RuntimeError(f"Unknown statement: {statement}")
 
-        return res
+        return '\n'.join(res)
 
     @classmethod
     def _generate_switch(cls, mapping, statement, symbol):
@@ -397,7 +403,7 @@ endmodule
 
         # TODO: Change switch with 0/1 to if
 
-        body = ''
+        body = []
         for case, statements in statement.cases.items():
             if isinstance(case, str):
                 try:
@@ -421,18 +427,19 @@ endmodule
             else:
                 begin = end = ''
 
-            body += f'    {case}:{begin}\n'
+            body.append(f'    {case}:{begin}')
 
             if statements:
                 case_body = cls._generate_statements(mapping, statements, symbol=symbol)
             else:
                 case_body = '/* empty */;\n'
 
-            body += indent(case_body, ' '*8) + end
+            body.append(indent(case_body, ' '*8) + end)
 
+        body = '\n'.join(body)
         footer = 'endcase'
 
-        return dedent(f'{header}\n{body[:-1]}\n{footer}\n')
+        return dedent(f'{header}\n{body}\n{footer}')
 
     @classmethod
     def _generate_submodule_blocks(cls, module):
