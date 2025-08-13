@@ -492,9 +492,7 @@ endmodule
             if value < 0:
                 value += 2**rhs.width
 
-            hexwidth = (rhs.width + 3) // 4
-
-            rhs = f"{max(1, rhs.width)}'h{format(value, f'0{hexwidth}x')}"
+            rhs = f"{max(1, rhs.width)}'h{hex(value)[2:]}"
             if signed:
                 rhs = f'$signed({rhs})'
 
@@ -1395,7 +1393,9 @@ class Module:
                 if curr_mapping is None:
                     self._signals[signal] = curr_mapping = Signal(mapping.signal, mapping.domain)
 
-                curr_mapping.domain = mapping.domain    # Allow for domain changes
+                if curr_mapping.domain is None:
+                    curr_mapping.domain = mapping.domain    # Allow for domain changes
+
                 for statement in mapping.statements:
                     self._signals[signal].add_statement(statement)
 
@@ -1477,6 +1477,8 @@ class MemoryModule(InstanceModule):
             self.enable = enable
             self.domain = domain
 
+            self.proxy = None
+
         @staticmethod
         def _get_signal(name, n, ports):
             signal = ports.get(name, None)
@@ -1513,19 +1515,11 @@ class MemoryModule(InstanceModule):
             ]
 
     class ReadPort(Port):
-        def __init__(self, data, index, enable, domain):
-            super().__init__( data, index, enable, domain)
-            self.read_comb = self.read_proxy = None
-
         @classmethod
         def from_fragment(cls, fragment, domain_resolver):
             return super().from_fragment(fragment, 'RD', domain_resolver)
 
     class WritePort(Port):
-        def __init__(self, data, index, enable, domain):
-            super().__init__( data, index, enable, domain)
-            self.write_proxy = None
-
         @classmethod
         def from_fragment(cls, fragment, domain_resolver):
             return super().from_fragment(fragment, 'WR', domain_resolver)
@@ -1574,23 +1568,23 @@ class MemoryModule(InstanceModule):
             rdomain = rport.domain.name if rport.domain is not None else None
             self._signals[rport.data].domain = rdomain
 
-            rport.read_comb = self._new_signal(shape = self._width, prefix = f'{self.name}_comb')
+            rport.proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_r_data')
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
                 self._signals.pop(rport.enable, None)
 
-            self._add_new_statement(rport.read_comb, Assign(MemoryPort(self._mem.signal, domain = rdomain, index = rport.index)))
+            self._add_new_statement(rport.proxy, Assign(MemoryPort(self._mem.signal, domain = rdomain, index = rport.index)))
 
         for wport in self._w_ports:
             wdomain = wport.domain.name if wport.domain is not None else None
-            wport.write_proxy = self._new_signal(
+            wport.proxy = self._new_signal(
                 shape = self._width,
                 prefix = f'{self.name}_internal',    # Doesn't matter, signal won't really exist
                 mapping = MemoryPort,
                 domain = wdomain,
                 index = wport.index,
             )
-            self._signals[wport.write_proxy].signal = self._mem.signal    # Hacky!
+            self._signals[wport.proxy].signal = self._mem.signal    # Hacky!
 
         self._update_statements(self.fragment.statements)
 
@@ -1610,7 +1604,7 @@ class MemoryModule(InstanceModule):
 
             for rport in self._r_ports:
                 if rhs.index is rport.index:
-                    return rport.read_comb
+                    return rport.proxy
 
             raise RuntimeError(f"Port read index not found for memory {self.name}")
 
@@ -1622,7 +1616,7 @@ class MemoryModule(InstanceModule):
 
             for wport in self._w_ports:
                 if lhs.index is wport.index:
-                    return [(wport.write_proxy, Assign(rhs))]
+                    return [(wport.proxy, Assign(rhs))]
 
             raise RuntimeError(f"Port write index not found for memory {self.name}")
 
@@ -1632,7 +1626,7 @@ class MemoryModule(InstanceModule):
         # else:
         #     for rport in self._r_ports:
         #         if lhs is rport.data:
-        #             return [(rport.read_proxy, Assign(rhs))]
+        #             return [(rport.proxy, Assign(rhs))]
 
         return super()._process_lhs(lhs, rhs, start_idx, stop_idx)
 
