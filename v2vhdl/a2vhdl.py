@@ -1191,9 +1191,9 @@ class Module:
                 #     new_value = -new_value
                 signed = _force_sign
 
-            # FIX: Need to lose sign, otherwise it will be detected as negative!
-            if new_value > 0 and signed and (new_value & (1 << (size - 1))):
-                signed = False
+            # Possible FIX: Need to lose sign, otherwise it will be detected as negative!
+            # if new_value > 0 and signed and (new_value & (1 << (size - 1))):
+            #     signed = False
 
             rhs = ast.Const(new_value, ast.Shape(size, signed))
 
@@ -1250,8 +1250,13 @@ class Module:
                             self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
                     else:
+                        # FIX: Don't force sign in comparison!
+                        if rhs.operator in ['>', '<', '>=', '<=']:
+                            signed = None
+                        else:
+                            signed = any(op.shape().signed for op in operands)
+
                         max_size = max(size, max(len(op) for op in operands))
-                        signed = any(op.shape().signed for op in operands)
                         rhs.operands = [self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands]
 
                 elif len(operands) == 3:
