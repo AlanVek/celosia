@@ -249,6 +249,10 @@ endmodule
     def _generate_initial(cls, mapping):
         res = ''
 
+        # Memory ports don't have initials, they're created with the parent signal's Memory
+        if isinstance(mapping, MemoryPort):
+            return res
+
         if isinstance(mapping, Signal):
             reset = None
             dir = ''
@@ -314,8 +318,10 @@ endmodule
         repr = mapping.signal.name
 
         size = len(mapping.signal)
-        if isinstance(mapping, Memory):
-            repr = f'{repr}[{cls._parse_rhs(mapping.w_index)}]'
+
+        if isinstance(mapping, MemoryPort):
+            repr = f'{repr}[{cls._parse_rhs(mapping.index)}]'
+
         elif start_idx is not None and stop_idx is not None:
             if start_idx != 0 or stop_idx != len(mapping.signal):
                 size = max(1, stop_idx - start_idx)
@@ -549,8 +555,8 @@ endmodule
             if rhs.stride != 1:
                 raise RuntimeError("Only Parts with stride 1 supported at end stage!")
             rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'
-        elif isinstance(rhs, Memory):
-            rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.r_index)}]'
+        elif isinstance(rhs, MemoryPort):
+            rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.index)}]'
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs))
 
@@ -632,11 +638,19 @@ class Port(Signal):
         #     self.reset_statement = None
 
 class Memory(Signal):
-    def __init__(self, signal, domain = None, w_index=None, r_index=None, init = None):
-        super().__init__(signal, domain=domain)
-        self.w_index = w_index
-        self.r_index = r_index
+    def __init__(self, signal, init = None):
+        super().__init__(signal)
         self.init = [] if init is None else init
+
+    @property
+    def reset_statement(self):
+        return None
+
+class MemoryPort(Signal):
+    def __init__(self, signal, domain=None, index=None):
+        super().__init__(signal, domain)
+        self.index = index
+        self.domain = domain
 
     @property
     def reset_statement(self):
@@ -1344,13 +1358,16 @@ class Module:
 
         for signal, mapping in m._signals.items():
 
-            if mapping is m._mem:
-                # self._sanitize_signal(signal)
+            if isinstance(mapping, (Memory, MemoryPort)):
+                assert signal not in self._signals, "Internal error with Memory signals"
                 self._signals[signal] = mapping
+
             else:
-                if signal not in self._signals:
-                    # self._sanitize_signal(signal)
-                    self._signals[signal] = Signal(mapping.signal, mapping.domain)
+                curr_mapping = self._signals.get(signal, None)
+                if curr_mapping is None:
+                    self._signals[signal] = curr_mapping = Signal(mapping.signal, mapping.domain)
+
+                curr_mapping.domain = mapping.domain    # Allow for domain changes
                 for statement in mapping.statements:
                     self._signals[signal].add_statement(statement)
 
@@ -1425,57 +1442,74 @@ class MemoryModule(InstanceModule):
 
     allow_remapping = False
 
+    class Port:
+        def __init__(self, data, index, enable, domain):
+            self.data = data
+            self.index = index
+            self.enable = enable
+            self.domain = domain
+
+        @staticmethod
+        def _get_signal(name, n, ports):
+            signal = ports.get(name, None)
+            if name is None:
+                raise RuntimeError(f"Failed to find signal {name} for memory port")
+            signal = signal[0]
+            assert isinstance(signal, ast.Cat), f"Port {name} for memory port must be a concatenation"
+            return signal.parts
+
+        @classmethod
+        def from_fragment(cls, fragment, prefix, domain_resolver):
+            ports = fragment.named_ports
+            parameters = fragment.parameters
+
+            n = parameters.get(f'{prefix}_PORTS', 0)
+
+            datas = cls._get_signal(f'{prefix}_DATA', n, ports)
+            indexes = cls._get_signal(f'{prefix}_ADDR', n, ports)
+            enables = cls._get_signal(f'{prefix}_EN', n, ports)
+
+            clk = cls._get_signal(f'{prefix}_CLK', n, ports)
+            domains = []
+
+            for i in range(n):
+                if isinstance(clk[i], ast.Const) and clk[i].value == 0:
+                    domain = None
+                else:
+                    domain = domain_resolver(clk[i])
+
+                domains.append(domain)
+
+            return [
+                cls(*entry) for entry in zip(datas, indexes, enables, domains)
+            ]
+
+    class ReadPort(Port):
+        def __init__(self, data, index, enable, domain):
+            super().__init__( data, index, enable, domain)
+            self.read_comb = self.read_proxy = None
+
+        @classmethod
+        def from_fragment(cls, fragment, domain_resolver):
+            return super().from_fragment(fragment, 'RD', domain_resolver)
+
+    class WritePort(Port):
+        def __init__(self, data, index, enable, domain):
+            super().__init__( data, index, enable, domain)
+            self.write_proxy = None
+
+        @classmethod
+        def from_fragment(cls, fragment, domain_resolver):
+            return super().from_fragment(fragment, 'WR', domain_resolver)
+
     def __init__(self, name, fragment, hdl=None, invalid_names=None, top=True):
         super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
 
-        self._mem = self._read_proxy = self._arr = self._read_comb = None
+        self._mem = None
+        self._arr = ast.SignalSet()
 
-        self._has_read = fragment.parameters.get('RD_CLK_ENABLE', ast.Const(0, 1)).value
-        if self._has_read:
-            rclk = fragment.named_ports.get('RD_CLK', None)
-            if rclk is None:
-                raise RuntimeError(f"Missing read clock for memory {self.name}")
-
-            if isinstance(rclk[0], ast.Const) and rclk[0].value == 0:
-                self._rdom = None
-            else:
-                self._rdom = self._find_domain_from_clock(self._process_rhs(rclk[0]))
-
-            rindex = fragment.named_ports.get('RD_ADDR', None)
-            if rindex is None:
-                raise RuntimeError(f"Failed to find read address for memory {self.name}")
-            self._rindex = self._process_rhs(rindex[0])
-
-            r_en = fragment.named_ports.get('RD_EN', None)
-            if r_en is None:
-                raise RuntimeError(f"Missing read enable for memory {self.name}")
-            self._r_en = self._process_rhs(r_en[0])
-
-            r_data = fragment.named_ports.get('RD_DATA', None)
-            if r_data is None:
-                raise RuntimeError(f"Missing read data for memory {self.name}")
-            self._r_data = self._process_rhs(r_data[0])
-        else:
-            self._rdom = self._rindex = self._r_en = self._r_data = None
-
-        self._has_write = fragment.parameters.get('WR_CLK_ENABLE', ast.Const(0, 1)).value
-        if self._has_write:
-            wclk = fragment.named_ports.get('WR_CLK', None)
-            if wclk is None:
-                raise RuntimeError(f"Missing read clock for memory {self.name}")
-            self._wdom = self._find_domain_from_clock(self._process_rhs(wclk[0]))
-            windex = fragment.named_ports.get('WR_ADDR', None)
-            if windex is None:
-                raise RuntimeError(f"Failed to find write address for memory {self.name}")
-            self._windex = self._process_rhs(windex[0])
-
-            w_en = fragment.named_ports.get('WR_EN', None)
-            if w_en is None:
-                raise RuntimeError(f"Missing write enable for memory {self.name}")
-            self._w_en = self._process_rhs(w_en[0])
-
-        else:
-            self._wdom = self._windex = self._w_en = None
+        self._r_ports = self.ReadPort.from_fragment(fragment, domain_resolver=self._find_domain_from_clock)
+        self._w_ports = self.WritePort.from_fragment(fragment, domain_resolver=self._find_domain_from_clock)
 
         self._width = fragment.parameters.get('WIDTH', None)
         if self._width is None:
@@ -1494,82 +1528,106 @@ class MemoryModule(InstanceModule):
         for domain in self.domains.values():
             if domain.clk is clock:
                 return domain
-        raise RuntimeError(f"Failed to find domain for clock {clock}")
+        raise RuntimeError(f"Failed to find domain for clock {clock} of {self.name}")
 
     def _prepare_signals(self):
         super()._prepare_signals()
 
-        # TODO: Handle multi-port and granularity!!!
+        # TODO: Handle granularity!!!
 
         self._mem = self._signals[self._new_signal(
             shape   = self._width,
             prefix  = self.name,
             mapping = Memory,
-            domain  = None if self._wdom is None else self._wdom.name,
-            w_index = self._windex,
-            r_index = self._rindex,
             init    = self._init,
         )]
 
-        if self._has_read:
-            self._read_comb = self._new_signal(shape = self._width, prefix = f'{self.name}_comb')
+        for rport in self._r_ports:
+            rdomain = rport.domain.name if rport.domain is not None else None
+            self._signals[rport.data].domain = rdomain
 
-            if self._rdom is None:  # TODO: Also here if r_en is never assigned by parent module
-                self._read_proxy = self._read_comb
-                self._signals.pop(self._r_en, None)
-            else:
-                self._read_proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_r_data', domain=self._rdom.name)
+            rport.read_comb = self._new_signal(shape = self._width, prefix = f'{self.name}_comb')
 
-            self._add_new_statement(self._read_comb, Assign(self._mem))
-            self._add_new_statement(self._r_data, Assign(self._read_proxy))
+            if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
+                self._signals.pop(rport.enable, None)
+
+            self._add_new_statement(rport.read_comb, Assign(MemoryPort(self._mem.signal, domain = rdomain, index = rport.index)))
+
+        for wport in self._w_ports:
+            wdomain = wport.domain.name if wport.domain is not None else None
+            wport.write_proxy = self._new_signal(
+                shape = self._width,
+                prefix = f'{self.name}_internal',    # Doesn't matter, signal won't really exist
+                mapping = MemoryPort,
+                domain = wdomain,
+                index = wport.index,
+            )
+            self._signals[wport.write_proxy].signal = self._mem.signal    # Hacky!
 
         self._update_statements(self.fragment.statements)
 
     def _reset(self):
         super()._reset()
-        self._arr = None
+        self._arr.clear()
 
     def _set_arr(self, arr):
-        if self._arr is not None:
-            return
-
-        self._arr = ast.SignalSet(arr.elems)
         for signal in arr.elems:
             self._signals.pop(signal, None)
+
+        self._arr.update(arr.elems)
 
     def _process_rhs(self, rhs, **kwargs):
         if isinstance(rhs, ast.ArrayProxy):
             self._set_arr(rhs)
-            return self._read_comb
+
+            for rport in self._r_ports:
+                if rhs.index is rport.index:
+                    return rport.read_comb
+
+            raise RuntimeError(f"Port read index not found for memory {self.name}")
 
         return super()._process_rhs(rhs, **kwargs)
 
     def _process_lhs(self, lhs, rhs, start_idx=None, stop_idx=None):
         if isinstance(lhs, ast.ArrayProxy):
             self._set_arr(lhs)
-            return [(self._mem.signal, Assign(rhs))]
+
+            for wport in self._w_ports:
+                if lhs.index is wport.index:
+                    return [(wport.write_proxy, Assign(rhs))]
+
+            raise RuntimeError(f"Port write index not found for memory {self.name}")
 
         elif isinstance(lhs, ast.Signal) and self._arr is not None and lhs in self._arr:
             return []
 
-        elif lhs is self._r_data:
-            return [(self._read_proxy, Assign(rhs))]
+        # else:
+        #     for rport in self._r_ports:
+        #         if lhs is rport.data:
+        #             return [(rport.read_proxy, Assign(rhs))]
 
         return super()._process_lhs(lhs, rhs, start_idx, stop_idx)
 
-    def _update_statements(self, statements, rst_cond = False, elems = None):
+    def _update_statements(self, statements):
         replace_statements = {}
 
         for i, st in enumerate(statements):
             if not isinstance(st, ast.Switch):
                 continue
 
-            if st.test is self._r_en and self._rdom is None:
+            if any(
+                st.test is rport.enable and rport.domain is None for rport in self._r_ports
+            ):
                 assert [('1',)] == list(st.cases), f"Invalid memory statement for module {self.name}"
                 replace_statements[i] = ast._StatementList(st.cases[('1',)])
 
             else:
-                rst_cond = (self._rdom is not None and st.test is self._rdom.rst) or (self._wdom is not None and st.test is self._wdom.rst)
+                rst_cond = any(
+                    rport.domain is not None and st.test is rport.domain.rst for rport in self._r_ports
+                )
+                rst_cond = rst_cond or any(
+                    wport.domain is not None and st.test is wport.domain.rst for wport in self._r_ports
+                )
                 if rst_cond:
                     replace_statements[i] = None
 
