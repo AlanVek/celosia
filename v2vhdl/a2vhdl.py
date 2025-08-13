@@ -1205,7 +1205,7 @@ class Module:
 
             # Downsize
             ################################
-            if rhs.width > size:
+            if rhs.width > size and not _allow_upsize:
                 if signed:
                     new_value += 2**rhs.width
                 new_value = new_value & ((1 << size) - 1)
@@ -1213,7 +1213,7 @@ class Module:
             ################################
 
             if _force_sign is not None:
-                if _allow_upsize and _force_sign and not signed:
+                if _allow_upsize and _force_sign and not signed and (new_value >> (size - 1)):
                     # Overflow!
                     # TODO: Maybe check sign bit before upsizing?
                     size += 1
@@ -1273,10 +1273,10 @@ class Module:
                             self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
 
-                        # # FIX: Need to force shift size early to avoid infinitely large signals
-                        # new_rhs = self._new_signal(size, prefix = 'shifted')
-                        # self._add_new_assign(new_rhs, rhs)
-                        # rhs = new_rhs
+                        # FIX: Ignore upsize constraint, need to force shift size early to avoid infinitely large signals
+                        new_rhs = self._new_signal(size, prefix = 'shifted')
+                        self._add_new_assign(new_rhs, rhs)
+                        rhs = new_rhs
                     else:
                         signed = any(op.shape().signed for op in operands)
                         for i, operand in enumerate(rhs.operands):
@@ -1297,16 +1297,15 @@ class Module:
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
-                # TODO: Is this always necessary?
-                # if len(rhs) > size and not _allow_upsize:
                 if _force_sign is None:
                     signed = rhs.shape().signed
                 else:
                     signed = _force_sign
 
-                new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded_op')
-                self._add_new_assign(new_rhs, rhs)
-                rhs = new_rhs
+                if len(rhs) < size or (len(rhs) > size and not _allow_upsize):
+                    new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded_op')
+                    self._add_new_assign(new_rhs, rhs)
+                    rhs = new_rhs
 
             else:
                 raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
@@ -1329,7 +1328,7 @@ class Module:
             for signal, st in statements:
                 per_signal[signal][case].append(st)
 
-        test = self._process_rhs(self._fix_rhs_size(test, len(test)))
+        test = self._fix_rhs_size(test)
 
         res = []
         for signal, cases in per_signal.items():
@@ -1338,7 +1337,8 @@ class Module:
         return res
 
     def _process_assign(self, assign: ast.Assign):
-        return self._process_lhs(assign.lhs, self._fix_rhs_size(assign.rhs, len(assign.lhs)))
+        # TODO: Is upsize allowed here?
+        return self._process_lhs(assign.lhs, self._fix_rhs_size(assign.rhs, len(assign.lhs), _allow_upsize=True))
 
     def _process_switch(self, switch: ast.Switch):
         cases = {}
