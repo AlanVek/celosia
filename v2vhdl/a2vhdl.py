@@ -1225,20 +1225,14 @@ class Module:
 
         else:
             signed = rhs.shape().signed
-            if _force_sign is not None:
-
+            if _force_sign is not None and _force_sign != signed:
                 # TODO: Always necessary or just for unsigned->signed?
-                if _allow_upsize and _force_sign != signed:
+                if _allow_upsize:
                     size += 1
 
-                if _force_sign and not signed:
-                    new_rhs = self._new_signal(ast.signed(size), prefix = 'signed')
-                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
-                    return new_rhs
-                elif not _force_sign and signed:
-                    new_rhs = self._new_signal(size, prefix = 'unsigned')
-                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
-                    return new_rhs
+                new_rhs = self._new_signal(ast.Shape(size, _force_sign), prefix = 'resigned')
+                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
+                return new_rhs
 
             if isinstance(rhs, ast.Cat):
                 for i, part in enumerate(rhs.parts):
@@ -1254,24 +1248,24 @@ class Module:
                     rhs.elems[i] = self._fix_rhs_size(elem)
 
             if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
-                signed = rhs.shape().signed
-                if len(rhs) < size:
-                    new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded')
+                if len(rhs) < size or (len(rhs) > size and not _allow_upsize):
+                    new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'resized')
                     self._add_new_assign(new_rhs, self._fix_rhs_size(rhs))
                     rhs = new_rhs
-                elif len(rhs) > size:
-                    rhs = self._fix_rhs_size(rhs[:size])
 
             elif isinstance(rhs, ast.Operator):
                 operands = rhs.operands
                 max_size = max(size, max(len(op) for op in operands))
 
                 if len(operands) == 1:
+                    # TODO: Do we need to force sign?
                     if rhs.operator == 'u':
-                        _force_sign = False
+                        signed = False
                     elif rhs.operator == 's':
-                        _force_sign = True
-                    rhs.operands = [self._fix_rhs_size(operands[0], max_size, _force_sign=_force_sign)]
+                        signed = True
+                    else:
+                        signed = _force_sign
+                    rhs.operands = [self._fix_rhs_size(operands[0], max_size, _force_sign=signed)]
 
                 elif len(operands) == 2:
                     if rhs.operator in ('<<', '>>'):
@@ -1281,27 +1275,20 @@ class Module:
                             self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
 
-                        # FIX: Need to force shift size early to avoid infinitely large signals
-                        new_rhs = self._new_signal(size, prefix = 'expand_shift')
-                        self._add_new_assign(new_rhs, rhs)
-                        rhs = new_rhs
+                        # # FIX: Need to force shift size early to avoid infinitely large signals
+                        # new_rhs = self._new_signal(size, prefix = 'shifted')
+                        # self._add_new_assign(new_rhs, rhs)
+                        # rhs = new_rhs
                     else:
                         signed = any(op.shape().signed for op in operands)
                         for i, operand in enumerate(rhs.operands):
                             rhs.operands[i] = self._fix_rhs_size(operand, _allow_upsize=True, _force_sign=signed)
 
-                        # TODO: Not sure which is correct (if any!)
-
-                        if True:
-                            max_size = max(size, max(len(op) for op in rhs.operands))
-                            rhs.operands = [
-                                self._fix_rhs_size(op, max_size) for op in operands
-                            ]
-                        else:
-                            if len(rhs) != size or (_force_sign is not None and _force_sign != signed):
-                                new_rhs = self._new_signal(ast.Shape(size, signed=_force_sign), prefix = 'expanded_op')
-                                self._add_new_assign(new_rhs, rhs)
-                                rhs = new_rhs
+                        signed = any(op.shape().signed for op in operands)
+                        max_size = max(size, max(len(op) for op in rhs.operands))
+                        rhs.operands = [
+                            self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands
+                        ]
 
                 elif len(operands) == 3:
                     signed = any(op.shape().signed for op in operands[1:])
@@ -1311,6 +1298,17 @@ class Module:
                     ]
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
+                # TODO: Is this always necessary?
+                # if len(rhs) > size and not _allow_upsize:
+                if _force_sign is None:
+                    signed = rhs.shape().signed
+                else:
+                    signed = _force_sign
+
+                new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded_op')
+                self._add_new_assign(new_rhs, rhs)
+                rhs = new_rhs
 
             else:
                 raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
