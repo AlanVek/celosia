@@ -859,8 +859,12 @@ class Module:
 
     def _cleanup_signal_names(self):
         extra = set()
-        if not self.top:
-            extra.update(port.signal.name for port in self.ports)
+
+        # For toplevel, ports have priority
+        for port in self.ports:
+            if self.top:
+                self._sanitize_signal(port.signal, extra=extra)
+            extra.add(self._change_case(port.signal.name))
 
         for submodule, _ in self.submodules:
             submodule.name = self.sanitize_module(submodule.name, extra=extra)
@@ -870,7 +874,7 @@ class Module:
             self.invalid_names.add(self._change_case(submodule.type))
 
         for signal, mapping in self._signals.items():
-            if self.top or not isinstance(mapping, Port):
+            if not isinstance(mapping, Port):
                 self._sanitize_signal(signal, extra=extra)
             extra.add(self._change_case(signal.name))
 
@@ -1269,6 +1273,11 @@ class Module:
                             self._fix_rhs_size(operands[0], max_size),
                             self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
+
+                        # FIX: Need to force shift size early to avoid infinitely large signals
+                        new_rhs = self._new_signal(size, prefix = 'expand_shift')
+                        self._add_new_assign(new_rhs, rhs)
+                        rhs = new_rhs
                     else:
                         signed = any(op.shape().signed for op in operands)
                         for i, operand in enumerate(rhs.operands):
