@@ -1273,6 +1273,22 @@ class Module:
                             self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
 
+
+                        # TODO: Size change possibility
+                        # rhs.operands[1] = self._fix_rhs_size(rhs.operands[1], _force_sign=False)
+
+                        # if isinstance(rhs.operands[1], ast.Const):
+                        #     shift = rhs.operands[1].value
+                        # else:
+                        #     shift = 2**len(rhs.operands[1]) - 1
+
+                        # if rhs.operator == '<<':
+                        #     new_size = max(len(rhs.operands[0]), size - shift)
+                        # else:
+                        #     new_size = max(len(rhs.operands[0]), size + shift)
+
+                        # rhs.operands[0] = self._fix_rhs_size(rhs.operands[0], new_size)
+
                         # FIX: Ignore upsize constraint, need to force shift size early to avoid infinitely large signals
                         new_rhs = self._new_signal(size, prefix = 'shifted')
                         self._add_new_assign(new_rhs, rhs)
