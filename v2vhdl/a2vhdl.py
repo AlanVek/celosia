@@ -108,6 +108,9 @@ class VHDL(HDL):
         if not name:
             name = cls.sanitize('unnamed')
 
+        if name[0].isnumeric():
+            name = 'esc_' + name
+
         return name
 
     @classmethod
@@ -183,6 +186,9 @@ endmodule
 
         if not name:
             name = cls.sanitize('unnamed')
+
+        if name[0].isnumeric():
+            name = 'esc_' + name
 
         return name
 
@@ -964,6 +970,7 @@ class Module:
         elif isinstance(lhs, ast.Cat):
             loffset = roffset = 0
             parts = [part for part in lhs.parts if len(part)]
+
             for part in parts:
                 new_start = 0
                 new_stop = len(part)
@@ -983,6 +990,9 @@ class Module:
 
                 if roffset == 0 and len(part) >= len(rhs):
                     new_rhs = rhs
+                elif isinstance(rhs, ast.Slice):
+                    # FIX: Avoid duplicating slices!
+                    new_rhs = ast.Slice(rhs.value, rhs.start + roffset, min(rhs.start + roffset + len(part), rhs.stop))
                 else:
                     new_rhs = self._slice_check_const(rhs, roffset, roffset + len(part))
 
@@ -1180,6 +1190,10 @@ class Module:
                 # if _force_sign != signed:
                 #     new_value = -new_value
                 signed = _force_sign
+
+            # FIX: Need to lose sign, otherwise it will be detected as negative!
+            if new_value > 0 and signed and (new_value & (1 << (size - 1))):
+                signed = False
 
             rhs = ast.Const(new_value, ast.Shape(size, signed))
 
