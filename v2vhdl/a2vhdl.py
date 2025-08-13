@@ -484,7 +484,10 @@ endmodule
             value = rhs.value
             if value < 0:
                 value += 2**rhs.width
-            rhs = f"{max(1, rhs.width)}'h{hex(value)[2:]}"
+
+            hexwidth = (rhs.width + 3) // 4
+
+            rhs = f"{max(1, rhs.width)}'h{format(value, f'0{hexwidth}x')}"
             if signed:
                 rhs = f'$signed({rhs})'
 
@@ -1178,7 +1181,7 @@ class Module:
 
         return dividend, divisor
 
-    def _fix_rhs_size(self, rhs, size=None, *, _force_sign=None):
+    def _fix_rhs_size(self, rhs, size=None, *, _force_sign=None, _allow_upsize=False):
         if size is None:
             size = len(rhs)
 
@@ -1201,19 +1204,22 @@ class Module:
             ################################
 
             if _force_sign is not None:
-                # if _force_sign != signed:
-                #     new_value = -new_value
+                if _allow_upsize and _force_sign and not signed:
+                    # Overflow!
+                    # TODO: Maybe check sign bit before upsizing?
+                    size += 1
                 signed = _force_sign
-
-            # Possible FIX: Need to lose sign, otherwise it will be detected as negative!
-            # if new_value > 0 and signed and (new_value & (1 << (size - 1))):
-            #     signed = False
 
             rhs = ast.Const(new_value, ast.Shape(size, signed))
 
         else:
             signed = rhs.shape().signed
             if _force_sign is not None:
+
+                # TODO: Always necessary or just for unsigned->signed?
+                if _allow_upsize and _force_sign != signed:
+                    size += 1
+
                 if _force_sign and not signed:
                     new_rhs = self._new_signal(ast.signed(size), prefix = 'signed')
                     self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
@@ -1264,14 +1270,22 @@ class Module:
                             self._fix_rhs_size(operands[1], _force_sign=False),
                         ]
                     else:
-                        # FIX: Don't force sign in comparison!
-                        if rhs.operator in ['>', '<', '>=', '<=']:
-                            signed = None
-                        else:
-                            signed = any(op.shape().signed for op in operands)
+                        signed = any(op.shape().signed for op in operands)
+                        for i, operand in enumerate(rhs.operands):
+                            rhs.operands[i] = self._fix_rhs_size(operand, _allow_upsize=True, _force_sign=signed)
 
-                        max_size = max(size, max(len(op) for op in operands))
-                        rhs.operands = [self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands]
+                        # TODO: Not sure which is correct (if any!)
+
+                        if True:
+                            max_size = max(size, max(len(op) for op in rhs.operands))
+                            rhs.operands = [
+                                self._fix_rhs_size(op, max_size) for op in operands
+                            ]
+                        else:
+                            if len(rhs) != size or (_force_sign is not None and _force_sign != signed):
+                                new_rhs = self._new_signal(ast.Shape(size, signed=_force_sign), prefix = 'expanded_op')
+                                self._add_new_assign(new_rhs, rhs)
+                                rhs = new_rhs
 
                 elif len(operands) == 3:
                     signed = any(op.shape().signed for op in operands[1:])
