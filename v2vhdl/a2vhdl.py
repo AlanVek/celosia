@@ -794,7 +794,7 @@ class Switch(Statement):
         elif isinstance(case, str):
             case = [case.replace('-', '?').replace(' ', '')]
         elif isinstance(case, int):
-            case = [Switch.convert_case(test, format(case, f'0{len(test)}b'))]
+            case = Switch.convert_case(test, format(case, f'0{len(test)}b'))
         else:
             raise RuntimeError(f"Unknown switch case: {case}")
 
@@ -1655,6 +1655,7 @@ class MemoryModule(InstanceModule):
             rdomain = rport.domain.name if rport.domain is not None else None
             self._signals[rport.data].domain = rdomain
 
+            # TODO: Avoid using combinational proxy and directly use mem[addr]
             rport.proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_r_data')
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
