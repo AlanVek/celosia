@@ -5,6 +5,7 @@ from textwrap import dedent, indent
 
 class HDL:
     case_sensitive = False
+    spaces = 4
 
     @classmethod
     def sanitize(cls, name):
@@ -20,6 +21,13 @@ class HDL:
     @classmethod
     def _convert_module(cls, module):
         return ''
+
+    @classmethod
+    def tabs(cls, n=1):
+        if n <= 0:
+            return ''
+
+        return ' ' * (cls.spaces * n)
 
 class VHDL(HDL):
     case_sensitive = False
@@ -123,38 +131,39 @@ class Verilog(HDL):
         'always',         'and',            'assign',         'begin',
         'buf',            'bufif0',         'bufif1',         'case',
         'casex',          'casez',          'cmos',           'config',
-        'deassign',
-        'default',        'defparam',       'design',         'disable',
-        'edge',           'else',           'end',            'endcase',
-        'endfunction',    'endmodule',      'endprimitive',   'endspecify',
-        'endtable',       'endtask',        'event',          'for',
-        'force',          'forever',        'fork',           'function',
-        'highz0',         'highz1',         'if',             'ifnone',
-        'initial',        'inout',          'input',          'integer',
-        'join',           'large',          'localparam',     'macromodule',
-        'medium',         'module',         'nand',           'negedge',
-        'nmos',           'nor',            'not',            'notif0',
-        'notif1',         'or',             'output',         'parameter',
-        'pmos',           'posedge',        'primitive',      'pull0',
-        'pull1',          'pulldown',       'pullup',         'rcmos',
-        'real',           'realtime',       'reg',            'release',
-        'repeat',         'rnmos',          'rpmos',          'rtran',
-        'rtranif0',       'rtranif1',       'scalared',       'signed',
-        'small',          'specify',        'specparam',      'strong0',
-        'strong1',        'supply0',        'supply1',        'table',
-        'task',           'time',           'tran',           'tranif0',
-        'tranif1',        'tri',            'tri0',           'tri1',
-        'triand',         'trior',          'trireg',         'unsigned',
-        'vectored',
-        'wait',           'wand',           'weak0',          'weak1',
-        'while',          'wire',           'wor',            'xnor',
-        'xor',
+        'deassign',       'default',        'defparam',       'design',
+        'disable',        'edge',           'else',           'end',
+        'endcase',        'endfunction',    'endmodule',      'endprimitive',
+        'endspecify',     'endtable',       'endtask',        'event',
+        'for',            'force',          'forever',        'fork',
+        'function',       'highz0',         'highz1',         'if',
+        'ifnone',         'initial',        'inout',          'input',
+        'integer',        'join',           'large',          'localparam',
+        'macromodule',    'medium',         'module',         'nand',
+        'negedge',        'nmos',           'nor',            'not',
+        'notif0',         'notif1',         'or',             'output',
+        'parameter',      'pmos',           'posedge',        'primitive',
+        'pull0',          'pull1',          'pulldown',       'pullup',
+        'rcmos',          'real',           'realtime',       'reg',
+        'release',        'repeat',         'rnmos',          'rpmos',
+        'rtran',          'rtranif0',       'rtranif1',       'scalared',
+        'signed',         'small',          'specify',        'specparam',
+        'strong0',        'strong1',        'supply0',        'supply1',
+        'table',          'task',           'time',           'tran',
+        'tranif0',        'tranif1',        'tri',            'tri0',
+        'tri1',           'triand',         'trior',          'trireg',
+        'unsigned',       'vectored',       'wait',           'wand',
+        'weak0',          'weak1',          'while',          'wire',
+        'wor',            'xnor',           'xor',
     ]
 
     template = """module {name} (
 {port_block}
 );
-{initials_block}{submodules_block}{blocks_block}{assignment_block}
+{initials_block}
+{submodules_block}
+{blocks_block}
+{assignment_block}
 endmodule
 """
 
@@ -249,7 +258,7 @@ endmodule
         assignment_block = '\n'.join(assignment_block)
         blocks_block = '\n'.join(blocks_block)
         blocks = (port_block, initial_block, assignment_block, blocks_block)
-        return (indent(block, ' '*4) for block in blocks)
+        return (indent(block, cls.tabs()) for block in blocks)
 
     @classmethod
     def _generate_initial(cls, mapping):
@@ -285,7 +294,7 @@ endmodule
         if isinstance(mapping, Memory):
             res += '\ninitial begin\n'
             for i, reset in enumerate(mapping.init):
-                res += f'    {mapping.signal.name}[{i}] = {cls._parse_rhs(reset)};\n'
+                res += f'{cls.tabs()}{mapping.signal.name}[{i}] = {cls._parse_rhs(reset)};\n'
             res += 'end'
 
         return res
@@ -370,7 +379,7 @@ endmodule
             symbol = '<='
 
         header = f'always @{triggers} begin'
-        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol), ' '*4)
+        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol), cls.tabs())
         footer = 'end'
 
         return dedent(f"{header}\n{blocks}\n{footer}\n")
@@ -398,10 +407,61 @@ endmodule
         return '\n'.join(res)
 
     @classmethod
-    def _generate_switch(cls, mapping, statement, symbol):
-        header = f'casez ({cls._parse_rhs(statement.test)})'
+    def _generate_if(cls, mapping, statement, as_if, symbol):
+        if_opening = 'if'
+        else_done = False
 
-        # TODO: Change switch with 0/1 to if
+        ret = ''
+        for i, case in enumerate(as_if):
+            if else_done:
+                raise RuntimeError("New case after 'else'")
+
+            if isinstance(case, Switch.If):
+                opening = if_opening
+                if_opening = 'else if'
+            elif isinstance(case, Switch.Else):
+                opening = 'else'
+                else_done = True
+
+            # if (
+            #     (len(case.statements) == 0) or
+            #     (len(case.statements) > 1) or
+            #     (len(case.statements) == 1 and not isinstance(case.statements[0], Assign))
+            # ):
+            begin = ' begin'
+            end = 'end'
+            # else:
+            #     begin = end = ''
+
+            if case.test is None:
+                ret += f'{opening}{begin}'
+            else:
+                ret += f'{opening} ({cls._parse_rhs(case.test)}){begin}'
+
+            if case.statements:
+                case_body = cls._generate_statements(mapping, case.statements, symbol=symbol)
+            else:
+                case_body = ''
+
+            ret += '\n' + indent(case_body, cls.tabs())
+            if case_body and end:
+                ret += '\n'
+            ret += end
+
+            if i < len(as_if) - 1:
+                if end:
+                    ret += ' '
+                else:
+                    ret += '\n'
+
+        return ret
+
+    @classmethod
+    def _generate_switch(cls, mapping, statement, symbol):
+        if statement.as_if is not None:
+            return cls._generate_if(mapping, statement, statement.as_if, symbol)
+
+        header = f'casez ({cls._parse_rhs(statement.test)})'
 
         body = []
         for case, statements in statement.cases.items():
@@ -423,18 +483,20 @@ endmodule
 
             if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], Assign)):
                 begin = ' begin'
-                end = '    end\n'
+                end = f'{cls.tabs()}end'
             else:
                 begin = end = ''
 
-            body.append(f'    {case}:{begin}')
+            body.append(f'{cls.tabs()}{case}:{begin}')
 
             if statements:
                 case_body = cls._generate_statements(mapping, statements, symbol=symbol)
             else:
-                case_body = '/* empty */;\n'
+                case_body = '/* empty */;'
 
-            body.append(indent(case_body, ' '*8) + end)
+            body.append(indent(case_body, cls.tabs(2)))
+            if end:
+                body.append(end)
 
         body = '\n'.join(body)
         footer = 'endcase'
@@ -473,16 +535,16 @@ endmodule
             if params:
                 res += ' #(\n'
                 for key, value in params.items():
-                    res += f'    .{key}({cls._parse_rhs(value)}),\n'   # TODO: Check types
+                    res += f'{cls.tabs()}.{key}({cls._parse_rhs(value)}),\n'   # TODO: Check types
                 res = res[:-2] + '\n)'
 
             res += f' {submodule.name} (\n'
             for key, value in ports.items():
-                res += f'    .{key}({cls._parse_rhs(value, allow_signed=False)}),\n'
+                res += f'{cls.tabs()}.{key}({cls._parse_rhs(value, allow_signed=False)}),\n'
 
             res = res[:-2] + '\n);\n'
 
-        return indent(res, ' '*4)
+        return indent(res, cls.tabs())
 
     @classmethod
     def _parse_rhs(cls, rhs, allow_signed=True):
@@ -674,11 +736,23 @@ class Assign(Statement):
         self._stop_idx = stop_idx
 
 class Switch(Statement):
+
+    class Case:
+        def __init__(self, test, statements):
+            self.test = test
+            self.statements = statements
+
+    class If(Case):
+        pass
+
+    class Else(Case):
+        def __init__(self, statements):
+            super().__init__(None, statements)
+
     def __init__(self, test, cases):
         self.test  = test
-        self.cases = {
-            self.convert_case(test, case): statements for case, statements in cases.items()
-        }
+        self.cases = self.process_cases(test, cases)
+
         # Move default to last place
         default = self.cases.pop(None, None)
         if default is not None:
@@ -686,20 +760,7 @@ class Switch(Statement):
 
         self.strip_unused_cases()
 
-    @staticmethod
-    def _get_matching_patterns(case):
-        tmp = [case]
-        while True:
-            if not any('?' in t for t in tmp):
-                break
-
-            pops = len(tmp)
-            for t in tmp[:pops]:
-                tmp.append(t.replace('?', '0', count=1))
-                tmp.append(t.replace('?', '1', count=1))
-                tmp.pop(0)
-
-        return set(tmp)
+        self.as_if = self._as_if()
 
     def strip_unused_cases(self):
         patterns = []
@@ -720,42 +781,52 @@ class Switch(Statement):
         for pop in pops:
             self.cases.pop(pop)
 
-    @staticmethod
-    def convert_case(test, case):
+    @classmethod
+    def convert_case(cls, test, case):
         if isinstance(case, tuple):
-            if len(case) == 1:
-                case = Switch.convert_case(test, case[0])   # TODO: May be more than 1!
-            elif len(case) == 0:
-                case = None
+            if len(case) == 0:
+                case = [None]
             else:
-                raise NotImplementedError("Case {} not supported".format(case))
+                new_cases = []
+                for c in case:
+                    new_cases.extend(Switch.convert_case(test, c))
+                case = new_cases
         elif isinstance(case, str):
-            if '-' in case or '?' in case:
-                case = case.replace('-', '?')
-            case = case.replace(' ', '')
+            case = [case.replace('-', '?').replace(' ', '')]
         elif isinstance(case, int):
-            case = Switch.convert_case(test, format(case, f'0{len(test)}b'))
+            case = [Switch.convert_case(test, format(case, f'0{len(test)}b'))]
         else:
             raise RuntimeError(f"Unknown switch case: {case}")
 
         return case
 
-    def converted_as_if(self):
-        real_cases = {
-            case: statements for case, statements in self.cases.items() if statements
-        }
+    @classmethod
+    def process_cases(cls, test, cases):
+        ret = {}
 
-        # TODO: Check covered cases with ? to determine whether all cases are covered (equivalent to using default)!
+        for case, statements in cases.items():
+            new_cases = cls.convert_case(test, case)
 
-        if None in real_cases:
-            # If default has statements, allow if/else uf up to three cases if(==) else if (!=)
-            if len(self.cases) <= 3:
-                pass
+            for c in new_cases:
+                ret[c] = statements
 
-        else:
-            pass
+        return ret
 
-        return None
+    def _as_if(self):
+        res = []
+
+        for case, statements in self.cases.items():
+            if case is None:
+                res.append(self.Else(statements))
+                break
+
+            if case.count('1') != 1 or not all(c in ['?', '1'] for c in case):
+                return None
+
+            bit = case[::-1].index('1')
+            res.append(self.If(self.test[bit], statements))
+
+        return res
 
 class Module:
 
