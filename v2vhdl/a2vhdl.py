@@ -6,6 +6,7 @@ from textwrap import dedent, indent
 class HDL:
     case_sensitive = False
     spaces = 4
+    portsep = ','
 
     template = """{name}
 {ports}
@@ -36,7 +37,7 @@ class HDL:
 
         formats = {
             'name': module.type,
-            **{key: indent(value, cls.tabs()) for key, value in {
+            **{key: indent(('\n' if value else '') + value, cls.tabs()) for key, value in {
                 'ports': ports, 'initials': initials, 'assignments': assignments, 'blocks': blocks,
                 'submodules': submodules, **signal_features, **submodule_features,
             }.items()},
@@ -86,7 +87,10 @@ class HDL:
             if not len(mapping.signal):
                 continue
 
-            initials.append(cls._generate_initial(mapping))
+            new_initial = cls._generate_initial(mapping)
+            if new_initial:
+                initials.append(new_initial)
+
             if isinstance(mapping, Port):
                 ports.append(f'{cls._generate_port(mapping)}')
 
@@ -99,14 +103,16 @@ class HDL:
                 elif mapping.reset_statement is not None:
                     statement = mapping.reset_statement
                 else:
-                    continue
-                assignments.append(cls._generate_assignment(mapping, statement))
+                    statement = None
+
+                if statement:
+                    assignments.append(cls._generate_assignment(mapping, statement))
             else:
                 blocks.append(f'{cls._generate_block(mapping, module)}')
 
             cls._generate_signal_features(mapping, module, signal_features)
 
-        ports = ',\n'.join(ports)
+        ports = indent(f'{cls.portsep}\n'.join(ports), cls.tabs())
         initials = '\n'.join(initials)
         assignments = '\n'.join(assignments)
         blocks = '\n'.join(blocks)
@@ -145,7 +151,7 @@ class HDL:
                         continue
                     # if port.signal not in module._signals:
                     #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
-                    ports[port.signal.name] = port.signal
+                    ports[port.signal.name] = port
 
             else:
                 if ports is None:
@@ -153,7 +159,9 @@ class HDL:
 
                 params.update(submodule.parameters)
 
-            submodules.append(cls._generate_submodule(submodule, ports, params))
+            port_values = {name: port.signal for name, port in ports.items()}
+
+            submodules.append(cls._generate_submodule(submodule, port_values, params))
             cls._generate_submodule_features(submodule, ports, params, submodule_features)
 
         return '\n'.join(submodules), submodule_features
@@ -166,23 +174,23 @@ class HDL:
     def _generate_statements(cls, mapping, statements):
         res = []
         for statement in statements:
-            res.append(cls._generate_statement(mapping, statement))
+            new = cls._generate_statement(mapping, statement)
+            if new:
+                res.append(new)
         return '\n'.join(res)
 
     @classmethod
     def _generate_statement(cls, mapping, statement):
-        res = []
-
         if isinstance(statement, Assign):
-            res.append(cls._generate_assignment(mapping, statement))
+            res = cls._generate_assignment(mapping, statement)
 
         elif isinstance(statement, Switch):
-            res.append(cls._generate_switch(mapping, statement))
+            res = cls._generate_switch(mapping, statement)
 
         else:
             raise RuntimeError(f"Unknown statement: {statement}")
 
-        return '\n'.join(res)
+        return res
 
     @classmethod
     def tabs(cls, n=1):
@@ -193,6 +201,7 @@ class HDL:
 
 class VHDL(HDL):
     case_sensitive = False
+    portsep = ';'
 
     protected = [
         'abs',                  'access',         'after',          'alias',          'all',
@@ -226,19 +235,12 @@ use ieee.numeric_std.all;
 use ieee.numeric_std_unsigned.all;
 
 entity {name} is
-    port (
-{ports}
-);
+    port ({ports}
+    );
 end {name};
 
-architecture rtl of {name} is
-{components}
-{types}
-{initials}
-begin
-{submodules}
-{blocks}
-{assignments}
+architecture rtl of {name} is{components}{types}{initials}
+begin{submodules}{blocks}{assignments}
 end rtl;
 """
 
@@ -290,6 +292,449 @@ end rtl;
     def _initialize_submodule_features(cls):
         return {'components': ''}
 
+    @staticmethod
+    def _generate_memory_type(mapping):
+        new_type = 'std_logic'
+        signal = mapping.signal
+        depth = len(mapping.init)
+
+        mapping._types = []
+
+        # TODO: Check that type doesn't collide with some name
+        for i, size in enumerate(([len(signal)] if len(signal) > 1 else []) + [depth]):
+            next_type = f'type_{signal.name}_{i}'
+            mapping._types.append((next_type, f'array (0 to {size - 1}) of {new_type}'))
+            new_type = next_type
+
+    @classmethod
+    def _get_memory_type(cls, mapping):
+        if not isinstance(mapping, Memory):
+            return None
+
+        if not hasattr(mapping, '_types'):
+            cls._generate_memory_type(mapping)
+
+        return mapping._types
+
+    @classmethod
+    def _generate_signal_features(cls, mapping, module, signal_features):
+        types = cls._get_memory_type(mapping)
+        if types is None:
+            return
+
+        for name, description in types:
+            signal_features['types'] += f'type {name} is {description};\n'
+
+    @classmethod
+    def _generate_signal_from_string(cls, name, width, dir=None, type=None):
+        # TODO: Check what to do with zero-width signals
+        # if len(mapping.signal) <= 0:
+        #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
+
+        if dir is None:
+            dir = ''
+        else:
+            if dir == 'i':
+                dir = 'in'
+            elif dir == 'o':
+                dir = 'out'
+            elif dir == 'io':
+                dir = 'inout'
+            dir = f'{dir} '
+
+        if type is None:
+            if width > 1:
+                type = f'std_logic_vector ({width - 1} downto 0)'
+            else:
+                type = 'std_logic'
+
+        return f'{name} : {dir}{type}'
+
+    @classmethod
+    def _generate_signal(cls, mapping, dir=None):
+        if isinstance(mapping, Memory):
+            if len(mapping.init) <= 0:
+                raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
+
+            type = cls._get_memory_type(mapping)[-1][0]
+        else:
+            type = None
+
+        return cls._generate_signal_from_string(mapping.signal.name, len(mapping.signal), dir=dir, type=type)
+
+    @classmethod
+    def _generate_port(cls, port):
+        return cls._generate_signal(port, port.direction)
+
+    @classmethod
+    def _generate_port_from_string(cls, name, width, dir, type=None):
+        return cls._generate_signal_from_string(name, width, dir=dir, type=type)
+
+    @classmethod
+    def _generate_reset(cls, values, width):
+        if isinstance(values, (int, ast.Const)):
+            values = [values]
+        elif not isinstance(values, (list, tuple, set)):
+            raise RuntimeError(f"Unknown reset value: {values}")
+
+        resets = []
+
+        for value in values:
+            if isinstance(value, ast.Const):
+                width = max(width, value.width)
+                value = value.value
+
+            binary_reset = format(value, f'0{width}b')
+            b0 = binary_reset[0]
+
+            if width == 1:
+                reset = f"'{b0}'"
+            elif all(b == b0 for b in binary_reset):
+                reset = f"(others => '{b0}')"
+            else:
+                reset = f'"{binary_reset}"'
+
+            resets.append(reset)
+
+        if len(resets) == 1:
+            return resets[0]
+        elif all(r == reset[0] for r in resets):
+            return f"(others => {resets[0]})"
+        else:
+            return '\n'.join((
+                '(',
+                indent(',\n'.join(f'{i} => {reset}' for i, reset in enumerate(resets)), cls.tabs()),
+                ')',
+            ))
+
+    @classmethod
+    def _generate_initial(cls, mapping):
+        # Memory ports don't have initials, they're created with the parent signal's Memory
+        if isinstance(mapping, MemoryPort):
+            return ''
+
+        # Ports don't have initials
+        if isinstance(mapping, Port):
+            return ''
+
+        if isinstance(mapping, Memory):
+            reset = mapping.init
+        else:
+            reset = mapping.signal.reset
+
+        return f'signal {cls._generate_signal(mapping)} := {cls._generate_reset(reset, len(mapping.signal))};'
+
+    @classmethod
+    def _generate_assignment(cls, mapping, statement):
+        start_idx = statement._start_idx
+        stop_idx = statement._stop_idx
+
+        repr = mapping.signal.name
+
+        size = len(mapping.signal)
+
+        if isinstance(mapping, MemoryPort):
+            repr = f'{repr}(to_integer({cls._parse_rhs(mapping.index)}))'
+
+        elif start_idx is not None and stop_idx is not None:
+            if start_idx != 0 or stop_idx != len(mapping.signal):
+                size = max(1, stop_idx - start_idx)
+                if size == 1:
+                    repr = f'{repr}({start_idx})'
+                else:
+                    repr = f'{repr}({stop_idx-1} downto {start_idx})'
+        elif start_idx is not None or stop_idx is not None:
+            raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
+
+        return f'{repr} <= {cls._parse_rhs(statement.rhs)};'
+
+    @classmethod
+    def _generate_block(cls, mapping, module):
+        statements = []
+
+        if mapping.reset_statement is not None:
+            statements.append(mapping.reset_statement)
+        statements.extend(mapping.statements)
+
+        if not statements:
+            return ''
+
+        if mapping.domain is None:
+            sensitivity = ['all']
+            triggers = None
+        else:
+            sensitivity = []
+            triggers = []
+
+            domain = module.domains.get(mapping.domain, None)
+            if domain is None:
+                raise RuntimeError(f"Unknown domain for module {module.name}: {mapping.domain}")
+
+            clk = cls._parse_rhs(domain.clk)
+            sensitivity.append(clk)
+
+            if domain.clk_edge == 'pos':
+                edge = 'rising'
+            else:
+                edge = 'falling'
+
+            triggers.append(f'{edge}_edge({clk})')            
+
+            if domain.async_reset and domain.rst is not None:
+                rst = cls._parse_rhs(domain.rst)
+                sensitivity.append(rst)
+                triggers.append(f'rising_edge({rst})')
+
+            triggers = f'({" or ".join(triggers)})'
+
+        tabs = 1 + bool(triggers)
+        if triggers:
+            header = f'if {triggers} then'
+            footer = 'end if;'
+        else:
+            header = footer = ''
+
+        # TODO: Check that process name doesn't collide with some name
+        return '\n'.join((
+            f'p_{mapping.signal.name}: process ({", ".join(sensitivity)})',
+            'begin',
+            *([indent(header, cls.tabs())] if header else []),
+            indent(cls._generate_statements(mapping, statements), cls.tabs(tabs)),
+            *([indent(footer, cls.tabs())] if footer else []),
+            'end process;',
+            '', # Add new line at the end to separate blocks
+        ))
+
+    # @classmethod
+    # def _generate_if(cls, mapping, statement, as_if):
+    #     if_opening = 'if'
+    #     else_done = False
+
+    #     ret = ''
+    #     for i, case in enumerate(as_if):
+    #         if else_done:
+    #             raise RuntimeError("New case after 'else'")
+
+    #         if isinstance(case, Switch.If):
+    #             opening = if_opening
+    #             if_opening = 'else if'
+    #         elif isinstance(case, Switch.Else):
+    #             opening = 'else'
+    #             else_done = True
+
+    #         # if (
+    #         #     (len(case.statements) == 0) or
+    #         #     (len(case.statements) > 1) or
+    #         #     (len(case.statements) == 1 and not isinstance(case.statements[0], Assign))
+    #         # ):
+    #         begin = ' begin'
+    #         end = 'end'
+    #         # else:
+    #         #     begin = end = ''
+
+    #         if case.test is None:
+    #             ret += f'{opening}{begin}'
+    #         else:
+    #             ret += f'{opening} ({cls._parse_rhs(case.test)}){begin}'
+
+    #         if case.statements:
+    #             case_body = cls._generate_statements(mapping, case.statements)
+    #         else:
+    #             case_body = ''
+
+    #         ret += '\n' + indent(case_body, cls.tabs())
+    #         if case_body and end:
+    #             ret += '\n'
+    #         ret += end
+
+    #         if i < len(as_if) - 1:
+    #             if end:
+    #                 ret += ' '
+    #             else:
+    #                 ret += '\n'
+
+    #     return ret
+
+    # @classmethod
+    # def _generate_switch(cls, mapping, statement):
+    #     if statement.as_if is not None:
+    #         return cls._generate_if(mapping, statement, statement.as_if)
+
+    #     body = []
+    #     for case, statements in statement.cases.items():
+    #         if isinstance(case, str):
+    #             try:
+    #                 case = int(case, 2)
+    #                 case = f"{len(statement.test)}'d{case}"
+    #             except ValueError:
+    #                 case = f"{len(statement.test)}'b{case}"
+
+    #         elif isinstance(case, int):
+    #             case = f"{len(statement.test)}'d{case}"
+
+    #         elif case is not None:
+    #             raise RuntimeError(f"Unknown case for switch: {case}")
+
+    #         if case is None:
+    #             case = 'default'
+
+    #         # if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], Assign)):
+    #         begin = ' begin'
+    #         end = f'{cls.tabs()}end'
+
+    #         body.append(f'{cls.tabs()}{case}:{begin}')
+
+    #         if statements:
+    #             case_body = cls._generate_statements(mapping, statements)
+    #         else:
+    #             case_body = '/* empty */;'
+
+    #         body.append(indent(case_body, cls.tabs(2)))
+    #         # if end:
+    #         body.append(end)
+
+    #     return '\n'.join((
+    #         f'casez ({cls._parse_rhs(statement.test)})',
+    #         *body,
+    #         'endcase',
+    #     ))
+
+    #     return dedent(f'{header}\n{body}\n{footer}')
+
+    @classmethod
+    def _generate_submodule(cls, submodule, ports, parameters):
+        res = []
+
+        if parameters:
+            # TODO: Check generics types
+            res.append('\n'.join((
+                'generic map (',
+                indent(',\n'.join(f'{name} => {value}' for name, value in parameters.items()), cls.tabs()),
+                ')'
+            )))
+
+        res.append('port map (')
+        if ports:
+            res.append(
+                indent(',\n'.join(f'{name} => {cls._parse_rhs(value)}' for name, value in ports.items()), cls.tabs()),
+            )
+
+        res.append(');')
+
+        return f'{submodule.name}: {submodule.type}\n{indent('\n'.join(res), cls.tabs())}'
+
+    @classmethod
+    def _generate_submodule_features(cls, submodule, ports, parameters, submodule_features):
+        # TODO: Support blackboxes
+
+        res = []
+
+        if parameters:
+            # TODO: Check generics types and parse defaults
+            res.append('\n'.join((
+                'generic (',
+                indent(';\n'.join(f'{name} : {type} := {default}' for name, (type, default) in parameters.items()), cls.tabs()),
+                ');'
+            )))
+
+        res.append('port (')
+        if ports:
+            res.append(
+                indent(';\n'.join(
+                    f'{cls._generate_port_from_string(name, len(value.signal), value.direction)}' for name, value in ports.items()
+                ), cls.tabs()),
+            )
+        res.append(');')
+
+        submodule_features['components'] += f"component {submodule.type} is\n{indent('\n'.join(res), cls.tabs())}\nend component;\n"
+
+    @classmethod
+    def _parse_rhs(cls, rhs, allow_signed=True):
+        return str(rhs)
+        if isinstance(rhs, ast.Const):
+            signed = rhs.signed
+            value = rhs.value
+            if value < 0:
+                value += 2**rhs.width
+
+            rhs = f"{max(1, rhs.width)}'h{hex(value)[2:]}"
+            if signed:
+                rhs = f'$signed({rhs})'
+
+        elif isinstance(rhs, int):
+            pass
+
+        elif isinstance(rhs, str):
+            rhs = f'"{rhs}"'
+
+        elif isinstance(rhs, ast.Signal):
+            signed = allow_signed and rhs.shape().signed
+            rhs = rhs.name
+            if signed:
+                rhs = f'$signed({rhs})'
+        elif isinstance(rhs, ast.Cat):
+            rhs = f"{{ {', '.join(cls._parse_rhs(part) for part in rhs.parts[::-1])} }}"
+        elif isinstance(rhs, ast.Slice):
+            if rhs.start == 0 and rhs.stop >= len(rhs.value):
+                rhs = cls._parse_rhs(rhs.value)
+            else:
+                if rhs.stop == rhs.start + 1:
+                    idx = rhs.start
+                else:
+                    idx = f'{rhs.stop-1}:{rhs.start}'
+
+                rhs = f"{cls._parse_rhs(rhs.value, allow_signed=False)}[{idx}]"
+
+        elif isinstance(rhs, ast.Operator):
+            allow_signed = rhs.operator != 'u'
+            parsed = list(map(lambda x: cls._parse_rhs(x, allow_signed=allow_signed), rhs.operands))
+            if len(rhs.operands) == 1:
+                p0 = parsed[0]
+                if rhs.operator == '+':
+                    rhs = p0
+                elif rhs.operator in ('~', '-'):
+                    rhs = f'{rhs.operator} {p0}'
+                elif rhs.operator == 'b':
+                    rhs = f'{p0} != {cls._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
+                elif rhs.operator in ('r|', 'r&', 'r^'):
+                    rhs = f'{rhs.operator[-1]} {p0}'
+                elif rhs.operator == "u":
+                    rhs = p0
+                elif rhs.operator == "s":
+                    if rhs.operands[0].shape().signed:
+                        rhs = p0
+                    else:
+                        rhs = f'$signed({p0})'
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            elif len(rhs.operands) == 2:
+                p0, p1 = parsed
+                if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
+                    rhs = f'{p0} {rhs.operator[0]} {p1}'
+                elif rhs.operator in ('<', '<=', '==', '!=', '>', '>=', '<<', '>>'):
+                    rhs = f'{p0} {rhs.operator} {p1}'
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            elif len(rhs.operands) == 3:
+                p0, p1, p2 = parsed
+                if rhs.operator == "m":
+                    rhs = f'{p0} ? {p1} : {p2}'
+                else:
+                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            else:
+                raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
+        elif isinstance(rhs, ast.Part):
+            if rhs.stride != 1:
+                raise RuntimeError("Only Parts with stride 1 supported at end stage!")
+            rhs = f'{cls._parse_rhs(rhs.value)} >> {cls._parse_rhs(rhs.offset)}'
+        elif isinstance(rhs, MemoryPort):
+            rhs = f'{cls._parse_rhs(rhs.signal)}[{cls._parse_rhs(rhs.index)}]'
+        else:
+            raise ValueError("Unknown RHS object detected: {}".format(rhs))
+
+        return rhs
+
 class Verilog(HDL):
     case_sensitive = True
     protected = [
@@ -322,13 +767,8 @@ class Verilog(HDL):
         'wor',            'xnor',           'xor',
     ]
 
-    template = """module {name} (
-{ports}
-);
-{initials}
-{submodules}
-{blocks}
-{assignments}
+    template = """module {name} ({ports}
+);{initials}{submodules}{blocks}{assignments}
 endmodule
 """
 
@@ -771,6 +1211,20 @@ class Signal:
 
         return False
 
+class RemappedSignal(Signal):
+    def __init__(self, signal, sync_signal):
+        super().__init__(signal, domain=None)
+        self.sync_signal = sync_signal
+
+    @property
+    def reset_statement(self):
+        reset = super().reset_statement
+
+        if reset is not None:
+            reset.rhs = self.sync_signal
+
+        return reset
+
 class Port(Signal):
     def __init__(self, signal, direction, domain=None):
         super().__init__(signal, domain)
@@ -1090,7 +1544,12 @@ class Module:
                 entry = self._signals[signal] = Signal(signal)
 
             if self.allow_remapping and domain is not None:
-                remap = self._remapped[signal] = self._new_signal(signal.shape(), prefix = f'{signal.name}_next')
+                remap = self._remapped[signal] = self._new_signal(
+                    signal.shape(),
+                    prefix = f'{signal.name}_next',
+                    mapping = RemappedSignal,
+                    sync_signal = signal,
+                )
 
                 # For some reason, cocotb needs rst duplication in comb and sync parts
                 if self.domains[domain].rst is None or not self.domains[domain].async_reset:
@@ -1100,8 +1559,6 @@ class Module:
                         '0': [Assign(remap)],
                         '1': [Assign(ast.Const(signal.reset, len(signal)))]
                     }))
-
-                self._signals[remap].add_statement(Assign(signal)) # TODO: Avoid duplicates
 
             entry.domain = domain
 
@@ -1336,6 +1793,10 @@ class Module:
     def _fix_rhs_size(self, rhs, size=None, *, _force_sign=None, _allow_upsize=False):
         if size is None:
             size = len(rhs)
+
+        # TODO: When the RHS is for example +, we need to know that the result will have +1 bit
+        # so we don't need to resize with max(size, max(len(operands)))... We should include that +1 to avoid
+        # upsizing signals unnecessarily
 
         # Fix: Zero-width signals!
         if len(rhs) == 0 and size > 0:
@@ -1588,6 +2049,8 @@ class Module:
                             local_signal = self._signals[new_port]
                         else:
                             raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
+
+                ports[port_name] = Port(port_name, kind)
 
                 if local_signal is not None:
                     local_signal.disable_reset_statement()
