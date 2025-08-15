@@ -4,6 +4,7 @@ import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir, dsl
+from typing import Union
 
 class Verilog(HDL):
     case_sensitive = True
@@ -195,7 +196,7 @@ endmodule
             '', # Add new line at the end to separate blocks
         ))
 
-    def _generate_if(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement, as_if: list[pyhdl_statement.Switch.If | pyhdl_statement.Switch.Else]):
+    def _generate_if(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement, as_if: list[Union[pyhdl_statement.Switch.If, pyhdl_statement.Switch.Else]]):
         if_opening = 'if'
         else_done = False
 
@@ -306,7 +307,7 @@ endmodule
 
         return res
 
-    def _parse_rhs(self, rhs: ast.Value | int | str | pyhdl_signal.MemoryPort, allow_signed: bool = True):
+    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], allow_signed: bool = True):
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value
@@ -401,7 +402,7 @@ endmodule
 
 
 def convert(
-    module: dsl.Module | ir.Fragment,
+    module: Union[dsl.Module, ir.Fragment],
     name: str = 'top',
     ports: list[ast.Signal] = None,
     platform = None,

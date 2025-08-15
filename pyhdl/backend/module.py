@@ -1,7 +1,7 @@
 from amaranth.hdl import ast, ir
 import pyhdl.backend.signal as pyhdl_signal
 import pyhdl.backend.statement as pyhdl_statement
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from pyhdl.hdl import HDL
@@ -138,7 +138,7 @@ class Module:
             raise RuntimeError(f"Missing signal {signal.name} from module {self.name}")
         return s
 
-    def _new_signal(self, shape: int | ast.Shape = 1, prefix: str = None, mapping: type = pyhdl_signal.Signal, **kwargs) -> ast.Value:
+    def _new_signal(self, shape: Union[int, ast.Shape] = 1, prefix: str = None, mapping: type = pyhdl_signal.Signal, **kwargs) -> ast.Value:
         name = prefix or 'tmp'
         new = ast.Signal(shape, name=name)
         # self._sanitize_signal(new)

@@ -4,6 +4,7 @@ import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir, dsl
+from typing import Union
 
 class VHDL(HDL):
     case_sensitive = False
@@ -50,7 +51,7 @@ begin{submodules}{blocks}{assignments}
 end rtl;
 """
 
-    def __init__(self, spaces: int = 4, blackboxes: list[dict[str, int | tuple]] = None):
+    def __init__(self, spaces: int = 4, blackboxes: list[dict[str, Union[int, str, tuple]]] = None):
         super().__init__(spaces=spaces)
         self._blackboxes = blackboxes
         self._types : dict[pyhdl_signal.Memory, list[tuple[str, str]]] = {}
@@ -132,7 +133,7 @@ end rtl;
         for name, description in types:
             self.signal_features['types'].append(f'type {name} is {description};')
 
-    def _generate_signal_from_string(self, name: str, width: int | ast.Shape, dir: str = None, type=None) -> str:
+    def _generate_signal_from_string(self, name: str, width: Union[int, ast.Shape], dir: str = None, type=None) -> str:
         # TODO: Check what to do with zero-width signals
         # if len(mapping.signal) <= 0:
         #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
@@ -415,7 +416,10 @@ end rtl;
 
         res.append(');')
 
-        return f'{submodule.name}: {submodule.type}\n{indent('\n'.join(res), self.tabs())}'
+        return '\n'.join((
+            f'{submodule.name}: {submodule.type}',
+            indent('\n'.join(res), self.tabs()),
+        ))
 
     def _generate_submodule_features(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
         # TODO: Support blackboxes
@@ -446,7 +450,7 @@ end rtl;
             ''
         ))
 
-    def _parse_rhs(self, rhs: ast.Value | int | str | pyhdl_signal.MemoryPort, allow_signed: bool = True):
+    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], allow_signed: bool = True):
         return str(rhs)
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
@@ -534,12 +538,12 @@ end rtl;
 
 
 def convert(
-    module: dsl.Module | ir.Fragment,
+    module: Union[dsl.Module, ir.Fragment],
     name: str = 'top',
     ports: list[ast.Signal] = None,
     platform = None,
     spaces: int = 4,
-    blackboxes: list[dict[str, int | tuple]] = None,
+    blackboxes: list[dict[str, Union[int, str, tuple]]] = None,
 ):
     return VHDL(
         spaces = spaces,

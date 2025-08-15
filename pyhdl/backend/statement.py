@@ -1,4 +1,5 @@
 from amaranth.hdl import ast
+from typing import Union
 
 class Statement:
     pass
@@ -12,7 +13,7 @@ class Assign(Statement):
 class Switch(Statement):
 
     class Case:
-        def __init__(self, test: ast.Value | None, statements: list[Statement]):
+        def __init__(self, test: ast.Value, statements: list[Statement]):
             self.test = test
             self.statements = statements
 
@@ -23,7 +24,7 @@ class Switch(Statement):
         def __init__(self, statements: list[Statement]):
             super().__init__(None, statements)
 
-    def __init__(self, test: ast.Value, cases: dict[int | str | tuple | None, list[Statement]]):
+    def __init__(self, test: ast.Value, cases: dict[Union[int, str, tuple], list[Statement]]):
         self.test = test
         self.cases = self.process_cases(test, cases)
 
@@ -56,7 +57,7 @@ class Switch(Statement):
             self.cases.pop(pop)
 
     @classmethod
-    def convert_case(cls, test: ast.Value, case: int | str | tuple) -> list[str | None]:
+    def convert_case(cls, test: ast.Value, case: Union[int, str, tuple]) -> list[str]:
         ret = []
         if isinstance(case, tuple):
             if len(case) == 0:
@@ -74,7 +75,7 @@ class Switch(Statement):
         return ret
 
     @classmethod
-    def process_cases(cls, test: ast.Value, cases: dict) -> dict[str | None, list[Statement]]:
+    def process_cases(cls, test: ast.Value, cases: dict) -> dict[str, list[Statement]]:
         ret = {}
 
         for case, statements in cases.items():
@@ -85,7 +86,7 @@ class Switch(Statement):
 
         return ret
 
-    def _as_if(self) -> list[If | Else] | None:
+    def _as_if(self) -> list[Union[If, Else]]:
         res = []
 
         for case, statements in self.cases.items():

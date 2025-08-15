@@ -84,7 +84,7 @@ class RemappedSignal(Signal):
         self.sync_signal = sync_signal
 
     @property
-    def reset_statement(self) -> None | pyhdl_statement.Assign:
+    def reset_statement(self) -> pyhdl_statement.Assign:
         reset = super().reset_statement
 
         if reset is not None:
