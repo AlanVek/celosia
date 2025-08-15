@@ -1,0 +1,13 @@
+[project]
+name = "pyhdl"
+authors = [
+    { name = "Alan Vekselman", email = "alanvek98@gmail.com" },
+]
+version = "0.0.1"
+requires-python = ">=3.8"
+dependencies = [
+    "amaranth==0.4.5",
+]
+
+[build-system]
+requires = ["setuptools"]
