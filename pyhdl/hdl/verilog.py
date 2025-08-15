@@ -407,7 +407,6 @@ def convert(
     platform = None,
     spaces: int = 4,
 ):
-    print('HERE')
     return Verilog(
         spaces = spaces,
     ).convert(

@@ -603,7 +603,15 @@ class Module:
 
         res = []
         for signal, cases in per_signal.items():
-            res.append((signal, pyhdl_statement.Switch(test, cases)))
+            switch = pyhdl_statement.Switch(test, cases)
+
+            if not switch.cases:
+                continue
+
+            if len(switch.cases) == 1 and None in switch.cases:
+                res.extend(((signal, statement) for statement in switch.cases[None]))
+            else:
+                res.append((signal, switch))
 
         return res
 

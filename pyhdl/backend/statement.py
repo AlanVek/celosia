@@ -90,7 +90,11 @@ class Switch(Statement):
 
         for case, statements in self.cases.items():
             if case is None:
-                res.append(self.Else(statements))
+                if res:
+                    res.append(self.Else(statements))
+                else:
+                    # FIX: Weird case, might not be filtered by previous stages
+                    res.append(self.If(ast.Const(1, 1), statements))
                 break
 
             if case.count('1') != 1 or not all(c in ['?', '1'] for c in case):
