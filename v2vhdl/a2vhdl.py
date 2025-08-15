@@ -1358,7 +1358,6 @@ class Module:
             if _force_sign is not None:
                 if _allow_upsize and _force_sign and not signed and (new_value >> (size - 1)):
                     # Overflow!
-                    # TODO: Maybe check sign bit before upsizing?
                     size += 1
                 signed = _force_sign
 
