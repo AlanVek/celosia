@@ -2,7 +2,7 @@ from textwrap import indent
 import pyhdl.backend.signal as pyhdl_signal
 import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
-from amaranth.hdl import ir
+from amaranth.hdl import ast, ir
 
 # TODO: If we find multiple signals with same statements, maybe we can merge them into one!
 
@@ -25,7 +25,7 @@ class HDL:
     def sanitize(self, name: str) -> str:
         return name
 
-    def convert(self, fragment: ir.Fragment, name: str = 'top', ports: list[pyhdl_signal.Port] = None, platform=None):
+    def convert(self, fragment: ir.Fragment, name: str = 'top', ports: list[ast.Signal] = None, platform=None):
         m = pyhdl_module.Module(name, fragment, hdl=self)
         m.prepare(ports, platform)
 
@@ -123,10 +123,10 @@ class HDL:
 
         return ports, initials, assignments, blocks
 
-    def _generate_submodule(self, submodule: pyhdl_module.Module, ports: list[pyhdl_signal.Port], parameters: dict) -> str:
+    def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict) -> str:
         return ''
 
-    def _generate_submodule_features(self, submodule: pyhdl_module.Module, ports: list[pyhdl_signal.Port], parameters: dict):
+    def _generate_submodule_features(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
         return
 
     def _generate_submodules(self) -> str:
@@ -155,9 +155,7 @@ class HDL:
 
                 params.update(submodule.parameters)
 
-            port_values = {name: port.signal for name, port in ports.items()}
-
-            submodules.append(self._generate_submodule(submodule, port_values, params))
+            submodules.append(self._generate_submodule(submodule, ports, params))
             self._generate_submodule_features(submodule, ports, params)
 
         return '\n'.join(submodules)

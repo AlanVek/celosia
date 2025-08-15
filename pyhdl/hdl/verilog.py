@@ -1,5 +1,6 @@
 from pyhdl.hdl import HDL
 import pyhdl.backend.signal as pyhdl_signal
+import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir, dsl
@@ -194,7 +195,7 @@ endmodule
             '', # Add new line at the end to separate blocks
         ))
 
-    def _generate_if(self, mapping, statement, as_if):
+    def _generate_if(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement, as_if: list[pyhdl_statement.Switch.If | pyhdl_statement.Switch.Else]):
         if_opening = 'if'
         else_done = False
 
@@ -243,7 +244,7 @@ endmodule
 
         return ret
 
-    def _generate_switch(self, mapping, statement):
+    def _generate_switch(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Switch):
         if statement.as_if is not None:
             return self._generate_if(mapping, statement, statement.as_if)
 
@@ -286,7 +287,7 @@ endmodule
             'endcase',
         ))
 
-    def _generate_submodule(self, submodule, ports, parameters):
+    def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
         res = ''
 
         res += f'{submodule.type}'
@@ -299,13 +300,13 @@ endmodule
 
         res += f' {submodule.name} (\n'
         for key, value in ports.items():
-            res += f'{self.tabs()}.{key}({self._parse_rhs(value, allow_signed=False)}),\n'
+            res += f'{self.tabs()}.{key}({self._parse_rhs(value.signal, allow_signed=False)}),\n'
 
         res = res[:-2] + '\n);'
 
         return res
 
-    def _parse_rhs(self, rhs, allow_signed=True):
+    def _parse_rhs(self, rhs: ast.Value | int | str | pyhdl_signal.MemoryPort, allow_signed: bool = True):
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value

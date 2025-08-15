@@ -85,7 +85,7 @@ class Switch(Statement):
 
         return ret
 
-    def _as_if(self) -> list | None:
+    def _as_if(self) -> list[If | Else] | None:
         res = []
 
         for case, statements in self.cases.items():

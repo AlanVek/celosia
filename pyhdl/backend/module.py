@@ -702,7 +702,7 @@ class Module:
                         else:
                             raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
-                ports[port_name] = pyhdl_signal.Port(port_name, kind)
+                ports[port_name] = pyhdl_signal.Port(ports[port_name], kind)
 
                 if local_signal is not None:
                     local_signal.disable_reset_statement()

@@ -1,5 +1,6 @@
 from pyhdl.hdl import HDL
 import pyhdl.backend.signal as pyhdl_signal
+import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir, dsl
@@ -395,7 +396,7 @@ end rtl;
 
     #     return dedent(f'{header}\n{body}\n{footer}')
 
-    def _generate_submodule(self, submodule, ports, parameters):
+    def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
         res = []
 
         if parameters:
@@ -409,14 +410,14 @@ end rtl;
         res.append('port map (')
         if ports:
             res.append(
-                indent(',\n'.join(f'{name} => {self._parse_rhs(value)}' for name, value in ports.items()), self.tabs()),
+                indent(',\n'.join(f'{name} => {self._parse_rhs(value.signal)}' for name, value in ports.items()), self.tabs()),
             )
 
         res.append(');')
 
         return f'{submodule.name}: {submodule.type}\n{indent('\n'.join(res), self.tabs())}'
 
-    def _generate_submodule_features(self, submodule, ports, parameters):
+    def _generate_submodule_features(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
         # TODO: Support blackboxes
 
         res = []
@@ -445,7 +446,7 @@ end rtl;
             ''
         ))
 
-    def _parse_rhs(self, rhs, allow_signed=True):
+    def _parse_rhs(self, rhs: ast.Value | int | str | pyhdl_signal.MemoryPort, allow_signed: bool = True):
         return str(rhs)
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
