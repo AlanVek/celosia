@@ -8,7 +8,6 @@ from amaranth.hdl import ir
 
 class HDL:
     case_sensitive = False
-    spaces = 4
     portsep = ','
 
     template = """{name}
@@ -53,7 +52,7 @@ class HDL:
 
         formats = {
             'name': self.module.type,
-            **{key: indent(('\n\n' if value else '') + value, self.tabs()) for key, value in {
+            **{key: indent(('\n' if value else '') + value, self.tabs()) for key, value in {
                 'ports': ports, 'initials': initials, 'assignments': assignments, 'blocks': blocks,
                 'submodules': submodules, **features,
             }.items()},
@@ -117,7 +116,7 @@ class HDL:
 
             self._generate_signal_features(mapping)
 
-        ports = indent(f'{self.portsep}\n'.join(ports), self.tabs())
+        ports = f'{self.portsep}\n'.join(ports)
         initials = '\n'.join(initials)
         assignments = '\n'.join(assignments)
         blocks = '\n'.join(blocks)
@@ -186,7 +185,6 @@ class HDL:
 
         return res
 
-    @classmethod
     def tabs(self, n: int = 1) -> str:
         if n <= 0:
             return ''

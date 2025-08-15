@@ -167,7 +167,7 @@ end rtl;
         return self._generate_signal_from_string(mapping.signal.name, len(mapping.signal), dir=dir, type=type)
 
     def _generate_port(self, port: pyhdl_signal.Port):
-        return self._generate_signal(port, port.direction)
+        return indent(self._generate_signal(port, port.direction), self.tabs())
 
     def _generate_port_from_string(self, name: str, width: int, dir: str, type=None):
         return self._generate_signal_from_string(name, width, dir=dir, type=type)

@@ -845,14 +845,10 @@ class MemoryModule(InstanceModule):
 
         for rport in self._r_ports:
             self.signals[rport.data].domain = rport.domain
-
-            # TODO: Avoid using combinational proxy and directly use mem[addr]
-            rport.proxy = self._new_signal(shape = self._width, prefix = f'{self.name}_r_data')
+            rport.proxy = pyhdl_signal.MemoryPort(self._mem.signal, index = rport.index)
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
                 self.signals.pop(rport.enable, None)
-
-            self._add_new_statement(rport.proxy, pyhdl_statement.Assign(pyhdl_signal.MemoryPort(self._mem.signal, index = rport.index)))
 
         for wport in self._w_ports:
             wport.proxy = self._new_signal(
@@ -886,6 +882,9 @@ class MemoryModule(InstanceModule):
 
             raise RuntimeError(f"Port read index not found for memory {self.name}")
 
+        if self._mem.signal in rhs._rhs_signals():
+            return rhs
+
         return super()._process_rhs(rhs, **kwargs)
 
     def _process_lhs(self, lhs: ast.Value, rhs: ast.Value, start_idx: int = None, stop_idx: int = None) -> list[tuple[ast.Signal, ast.Value]]:
@@ -900,11 +899,6 @@ class MemoryModule(InstanceModule):
 
         elif isinstance(lhs, ast.Signal) and self._arr is not None and lhs in self._arr:
             return []
-
-        # else:
-        #     for rport in self._r_ports:
-        #         if lhs is rport.data:
-        #             return [(rport.proxy, pyhdl_statement.Assign(rhs))]
 
         return super()._process_lhs(lhs, rhs, start_idx, stop_idx)
 

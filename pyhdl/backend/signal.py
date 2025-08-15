@@ -72,6 +72,12 @@ class Signal:
 
         return False
 
+    def shape(self):
+        return self.signal.shape()
+
+    def _rhs_signals(self):
+        return [self.signal]
+
 class RemappedSignal(Signal):
     def __init__(self, signal: ast.Signal, sync_signal: ast.Signal):
         super().__init__(signal, domain=None)
