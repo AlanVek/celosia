@@ -7,6 +7,14 @@ class HDL:
     case_sensitive = False
     spaces = 4
 
+    template = """{name}
+{ports}
+{initials}
+{submodules}
+{blocks}
+{assignments}
+"""
+
     @classmethod
     def sanitize(cls, name):
         return name
@@ -20,7 +28,161 @@ class HDL:
 
     @classmethod
     def _convert_module(cls, module):
+        if module.empty:
+            return ''
+
+        ports, initials, assignments, blocks, signal_features = cls._generate_signals(module)
+        submodules, submodule_features = cls._generate_submodules(module)
+
+        formats = {
+            'name': module.type,
+            **{key: indent(value, cls.tabs()) for key, value in {
+                'ports': ports, 'initials': initials, 'assignments': assignments, 'blocks': blocks,
+                'submodules': submodules, **signal_features, **submodule_features,
+            }.items()},
+        }
+
+        res = [cls.template.format(**formats)]
+        for submodule, _ in module.submodules:
+            if isinstance(submodule, InstanceModule):
+                continue
+            res.append(cls._convert_module(submodule))
+
+        return '\n'.join(res)
+
+    @classmethod
+    def _generate_port(cls, mapping):
         return ''
+
+    @classmethod
+    def _generate_initial(cls, mapping):
+        return ''
+
+    @classmethod
+    def _generate_assignment(cls, mapping, statement):
+        return ''
+
+    @classmethod
+    def _generate_block(cls, mapping, module):
+        return ''
+
+    @classmethod
+    def _generate_signal_features(cls, mapping, module, signal_features):
+        return
+
+    @classmethod
+    def _initialize_signal_features(cls):
+        return {}
+
+    @classmethod
+    def _generate_signals(cls, module):
+        ports = []
+        initials = []
+        assignments = []
+        blocks = []
+        signal_features = cls._initialize_signal_features()
+
+        for mapping in module._signals.values():
+            if not len(mapping.signal):
+                continue
+
+            initials.append(cls._generate_initial(mapping))
+            if isinstance(mapping, Port):
+                ports.append(f'{cls._generate_port(mapping)}')
+
+                if mapping.direction == 'i':
+                    continue
+
+            if mapping.static:
+                if mapping.statements:
+                    statement = mapping.statements[0]
+                elif mapping.reset_statement is not None:
+                    statement = mapping.reset_statement
+                else:
+                    continue
+                assignments.append(cls._generate_assignment(mapping, statement))
+            else:
+                blocks.append(f'{cls._generate_block(mapping, module)}')
+
+            cls._generate_signal_features(mapping, module, signal_features)
+
+        ports = ',\n'.join(ports)
+        initials = '\n'.join(initials)
+        assignments = '\n'.join(assignments)
+        blocks = '\n'.join(blocks)
+
+        return ports, initials, assignments, blocks, signal_features
+
+    @classmethod
+    def _generate_submodule(cls, submodule, ports, parameters):
+        return ''
+
+    @classmethod
+    def _generate_submodule_features(cls, submodule, ports, parameters, submodule_features):
+        return
+
+    @classmethod
+    def _initialize_submodule_features(cls):
+        return {}
+
+    @classmethod
+    def _generate_submodules(cls, module):
+        submodules = []
+        submodule_features = cls._initialize_submodule_features()
+
+        for submodule, ports in module.submodules:
+            params = {}
+            if not isinstance(submodule, InstanceModule):
+                if ports is not None:
+                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
+
+                if submodule.empty:
+                    continue
+
+                ports = {}
+                for port in submodule.ports:
+                    if not len(port.signal):
+                        continue
+                    # if port.signal not in module._signals:
+                    #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
+                    ports[port.signal.name] = port.signal
+
+            else:
+                if ports is None:
+                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
+
+                params.update(submodule.parameters)
+
+            submodules.append(cls._generate_submodule(submodule, ports, params))
+            cls._generate_submodule_features(submodule, ports, params, submodule_features)
+
+        return '\n'.join(submodules), submodule_features
+
+    @classmethod
+    def _generate_switch(cls, mapping, statement):
+        return ''
+
+    @classmethod
+    def _generate_statements(cls, mapping, statements):
+        res = []
+        for statement in statements:
+            res.append(cls._generate_statement(mapping, statement))
+        return '\n'.join(res)
+
+    @classmethod
+    def _generate_statement(cls, mapping, statement):
+        res = []
+
+        if isinstance(statement, Assign):
+            res.append(cls._generate_assignment(mapping, statement))
+
+        elif isinstance(statement, Switch):
+            res.append(cls._generate_switch(mapping, statement))
+
+        else:
+            raise RuntimeError(f"Unknown statement: {statement}")
+
+        return '\n'.join(res)
 
     @classmethod
     def tabs(cls, n=1):
@@ -59,27 +221,26 @@ class VHDL(HDL):
     ]
 
     template = """library ieee;
-        use ieee.std_logic_1164.all;
-        use ieee.numeric_std.all;
-        use ieee.numeric_std_unsigned.all;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.numeric_std_unsigned.all;
 
-        entity {name} is
-            port (
-{port_block}
-            );
-        end {name};
+entity {name} is
+    port (
+{ports}
+);
+end {name};
 
-        architecture rtl of {name} is
-{components_block}
-{constants_block}
-{types_block}
-{signal_block}
-        begin
-{assignment_block}
-{submodules_block}
-{blocks_block}
-        end rtl;
-        """
+architecture rtl of {name} is
+{components}
+{types}
+{initials}
+begin
+{submodules}
+{blocks}
+{assignments}
+end rtl;
+"""
 
     @classmethod
     def sanitize(cls, name):
@@ -122,8 +283,12 @@ class VHDL(HDL):
         return name
 
     @classmethod
-    def _convert_module(cls, module):
-        pass
+    def _initialize_signal_features(cls):
+        return {'types': ''}
+
+    @classmethod
+    def _initialize_submodule_features(cls):
+        return {'components': ''}
 
 class Verilog(HDL):
     case_sensitive = True
@@ -158,12 +323,12 @@ class Verilog(HDL):
     ]
 
     template = """module {name} (
-{port_block}
+{ports}
 );
-{initials_block}
-{submodules_block}
-{blocks_block}
-{assignment_block}
+{initials}
+{submodules}
+{blocks}
+{assignments}
 endmodule
 """
 
@@ -201,64 +366,29 @@ endmodule
 
         return name
 
-    @classmethod
-    def _convert_module(cls, module):
-        if module.empty:
-            return ''
+    @staticmethod
+    def _generate_signal(mapping, size=True):
+        # TODO: Check what to do with zero-width signals
+        # if len(mapping.signal) <= 0:
+        #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
 
-        port_block, initial_block, assignment_block, blocks_block = cls._parse_signals(module)
-        submodules_block = cls._generate_submodule_blocks(module)
+        if not size or len(mapping.signal) <= 1:
+            width = ''
+        else:
+            width = f'[{len(mapping.signal) - 1}:0] '
 
-        res = [cls.template.format(
-            name = module.type,
-            port_block = port_block,
-            initials_block = initial_block,
-            assignment_block = assignment_block,
-            submodules_block = submodules_block,
-            blocks_block = blocks_block,
-        )]
-        for submodule, _ in module.submodules:
-            if isinstance(submodule, InstanceModule):
-                continue
-            res.append(cls._convert_module(submodule))
+        if size and isinstance(mapping, Memory):
+            if len(mapping.init) <= 0:
+                raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
+            depth = f' [{len(mapping.init) - 1}:0]'
+        else:
+            depth = ''
 
-        return '\n'.join(res)
+        return f'{width}{mapping.signal.name}{depth}'
 
     @classmethod
-    def _parse_signals(cls, module):
-        port_block = []
-        initial_block = []
-        assignment_block = []
-        blocks_block = []
-
-        for mapping in module._signals.values():
-            if not len(mapping.signal):
-                continue
-
-            initial_block.append(cls._generate_initial(mapping))
-            if isinstance(mapping, Port):
-                port_block.append(f'{cls._generate_one_port(mapping)}')
-
-                if mapping.direction == 'i':
-                    continue
-
-            if mapping.static:
-                if mapping.statements:
-                    statement = mapping.statements[0]
-                elif mapping.reset_statement is not None:
-                    statement = mapping.reset_statement
-                else:
-                    continue
-                assignment_block.append(f'assign {cls._generate_one_assignment(mapping, statement, symbol="=")};')
-            else:
-                blocks_block.append(f'{cls._generate_one_block(mapping, module)}')
-
-        port_block = ',\n'.join(port_block)
-        initial_block = '\n'.join(initial_block)
-        assignment_block = '\n'.join(assignment_block)
-        blocks_block = '\n'.join(blocks_block)
-        blocks = (port_block, initial_block, assignment_block, blocks_block)
-        return (indent(block, cls.tabs()) for block in blocks)
+    def _generate_port(cls, port):
+        return cls._generate_signal(port, size=False)
 
     @classmethod
     def _generate_initial(cls, mapping):
@@ -286,47 +416,29 @@ endmodule
                     dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
                     dir += ' '
 
-            res += f'{dir}{type} {cls._generate_one_signal(mapping)}'
+            res += f'{dir}{type} {cls._generate_signal(mapping)}'
             if reset is not None:
                 res += f' = {reset}'
             res += ';'
 
         if isinstance(mapping, Memory):
-            res += '\ninitial begin\n'
-            for i, reset in enumerate(mapping.init):
-                res += f'{cls.tabs()}{mapping.signal.name}[{i}] = {cls._parse_rhs(reset)};\n'
-            res += 'end'
+            res += '\n'.join((
+                '',
+                'initial begin',
+                *[f'{cls.tabs()}{mapping.signal.name}[{i}] = {cls._parse_rhs(reset)};' for i, reset in enumerate(mapping.init)],
+                'end',
+            ))
 
         return res
 
-    @staticmethod
-    def _generate_one_signal(mapping, size=True):
-        # TODO: Check what to do with zero-width signals
-        # if len(mapping.signal) <= 0:
-        #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
-
-        if not size or len(mapping.signal) <= 1:
-            width = ''
-        else:
-            width = f'[{len(mapping.signal) - 1}:0] '
-
-        if size and isinstance(mapping, Memory):
-            if len(mapping.init) <= 0:
-                raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
-            depth = f' [{len(mapping.init) - 1}:0]'
-        else:
-            depth = ''
-
-        return f'{width}{mapping.signal.name}{depth}'
-
     @classmethod
-    def _generate_one_port(cls, port):
-        return cls._generate_one_signal(port, size=False)
-        dir = 'input' if port.direction == 'i' else 'output' if port.direction == 'o' else 'inout'
-        return f'{dir} {cls._generate_one_signal(port, size=False)}'
+    def _generate_assignment(cls, mapping, statement):
+        symbol = cls._get_symbol(mapping)
+        if mapping.static:
+            prefix = 'assign '
+        else:
+            prefix = ''
 
-    @classmethod
-    def _generate_one_assignment(cls, mapping, statement, symbol):
         start_idx = statement._start_idx
         stop_idx = statement._stop_idx
 
@@ -347,11 +459,10 @@ endmodule
         elif start_idx is not None or stop_idx is not None:
             raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
 
-        return f'{repr} {symbol} {cls._parse_rhs(statement.rhs)}'
+        return f'{prefix}{repr} {symbol} {cls._parse_rhs(statement.rhs)};'
 
     @classmethod
-    def _generate_one_block(cls, mapping, module):
-
+    def _generate_block(cls, mapping, module):
         statements = []
 
         if mapping.reset_statement is not None:
@@ -363,7 +474,6 @@ endmodule
 
         if mapping.domain is None:
             triggers = '*'
-            symbol = '='
         else:
             triggers = '('
             domain = module.domains.get(mapping.domain, None)
@@ -376,38 +486,16 @@ endmodule
                 triggers += f', posedge {cls._parse_rhs(domain.rst)}'
 
             triggers += ')'
-            symbol = '<='
 
-        header = f'always @{triggers} begin'
-        blocks = indent(cls._generate_statements(mapping, statements, symbol=symbol), cls.tabs())
-        footer = 'end'
-
-        return dedent(f"{header}\n{blocks}\n{footer}\n")
-
-    @classmethod
-    def _generate_statements(cls, mapping, statements, symbol):
-        res = []
-        for statement in statements:
-            res.append(cls._generate_one_statement(mapping, statement, symbol))
-        return '\n'.join(res)
+        return '\n'.join((
+            f'always @{triggers} begin',
+            indent(cls._generate_statements(mapping, statements), cls.tabs()),
+            'end',
+            '', # Add new line at the end to separate blocks
+        ))
 
     @classmethod
-    def _generate_one_statement(cls, mapping, statement, symbol):
-        res = []
-
-        if isinstance(statement, Assign):
-            res.append(f"{cls._generate_one_assignment(mapping, statement, symbol=symbol)};")
-
-        elif isinstance(statement, Switch):
-            res.append(f"{cls._generate_switch(mapping, statement, symbol=symbol)}")
-
-        else:
-            raise RuntimeError(f"Unknown statement: {statement}")
-
-        return '\n'.join(res)
-
-    @classmethod
-    def _generate_if(cls, mapping, statement, as_if, symbol):
+    def _generate_if(cls, mapping, statement, as_if):
         if_opening = 'if'
         else_done = False
 
@@ -439,7 +527,7 @@ endmodule
                 ret += f'{opening} ({cls._parse_rhs(case.test)}){begin}'
 
             if case.statements:
-                case_body = cls._generate_statements(mapping, case.statements, symbol=symbol)
+                case_body = cls._generate_statements(mapping, case.statements)
             else:
                 case_body = ''
 
@@ -457,11 +545,9 @@ endmodule
         return ret
 
     @classmethod
-    def _generate_switch(cls, mapping, statement, symbol):
+    def _generate_switch(cls, mapping, statement):
         if statement.as_if is not None:
-            return cls._generate_if(mapping, statement, statement.as_if, symbol)
-
-        header = f'casez ({cls._parse_rhs(statement.test)})'
+            return cls._generate_if(mapping, statement, statement.as_if)
 
         body = []
         for case, statements in statement.cases.items():
@@ -481,70 +567,48 @@ endmodule
             if case is None:
                 case = 'default'
 
-            if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], Assign)):
-                begin = ' begin'
-                end = f'{cls.tabs()}end'
-            else:
-                begin = end = ''
+            # if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], Assign)):
+            begin = ' begin'
+            end = f'{cls.tabs()}end'
 
             body.append(f'{cls.tabs()}{case}:{begin}')
 
             if statements:
-                case_body = cls._generate_statements(mapping, statements, symbol=symbol)
+                case_body = cls._generate_statements(mapping, statements)
             else:
                 case_body = '/* empty */;'
 
             body.append(indent(case_body, cls.tabs(2)))
-            if end:
-                body.append(end)
+            # if end:
+            body.append(end)
 
-        body = '\n'.join(body)
-        footer = 'endcase'
+        return '\n'.join((
+            f'casez ({cls._parse_rhs(statement.test)})',
+            *body,
+            'endcase',
+        ))
 
         return dedent(f'{header}\n{body}\n{footer}')
 
     @classmethod
-    def _generate_submodule_blocks(cls, module):
+    def _generate_submodule(cls, submodule, ports, parameters):
         res = ''
 
-        for submodule, ports in module.submodules:
-            params = {}
-            if not isinstance(submodule, InstanceModule):
-                if ports is not None:
-                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
+        res += f'{submodule.type}'
 
-                if submodule.empty:
-                    continue
+        if parameters:
+            res += ' #(\n'
+            for key, value in parameters.items():
+                res += f'{cls.tabs()}.{key}({cls._parse_rhs(value)}),\n'   # TODO: Check types
+            res = res[:-2] + '\n)'
 
-                ports = {}
-                for port in submodule.ports:
-                    if not len(port.signal):
-                        continue
-                    # if port.signal not in module._signals:
-                    #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
-                    ports[port.signal.name] = port.signal
+        res += f' {submodule.name} (\n'
+        for key, value in ports.items():
+            res += f'{cls.tabs()}.{key}({cls._parse_rhs(value, allow_signed=False)}),\n'
 
-            else:
-                if ports is None:
-                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {module.name}")
+        res = res[:-2] + '\n);'
 
-                params.update(submodule.parameters)
-
-            res += f'{submodule.type}'
-
-            if params:
-                res += ' #(\n'
-                for key, value in params.items():
-                    res += f'{cls.tabs()}.{key}({cls._parse_rhs(value)}),\n'   # TODO: Check types
-                res = res[:-2] + '\n)'
-
-            res += f' {submodule.name} (\n'
-            for key, value in ports.items():
-                res += f'{cls.tabs()}.{key}({cls._parse_rhs(value, allow_signed=False)}),\n'
-
-            res = res[:-2] + '\n);\n'
-
-        return indent(res, cls.tabs())
+        return res
 
     @classmethod
     def _parse_rhs(cls, rhs, allow_signed=True):
@@ -631,6 +695,14 @@ endmodule
             raise ValueError("Unknown RHS object detected: {}".format(rhs))
 
         return rhs
+
+    @staticmethod
+    def _get_symbol(mapping):
+        if mapping.static or mapping.domain is None:
+            res ='='
+        else:
+            res = '<='
+        return res
 
 class Signal:
     def __init__(self, signal, domain = None):
