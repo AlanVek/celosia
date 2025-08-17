@@ -3,12 +3,13 @@ import pyhdl.backend.signal as pyhdl_signal
 import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from textwrap import indent
-from amaranth.hdl import ast, ir, dsl
+from amaranth.hdl import ast, ir
 from typing import Union
 
 class VHDL(HDL):
     case_sensitive = False
     portsep = ';'
+    top_first = False
 
     protected = [
         'abs',                  'access',         'after',          'alias',          'all',
@@ -233,9 +234,11 @@ end rtl;
         repr = mapping.signal.name
 
         size = len(mapping.signal)
+        rhs_wrapper = lambda x: x
 
         if isinstance(mapping, pyhdl_signal.MemoryPort):
             repr = f'{repr}(to_integer({self._parse_rhs(mapping.index)}))'
+            rhs_wrapper = lambda x: f'{self._get_memory_type(mapping.memory(self.module))[0][0]}({x})'
 
         elif start_idx is not None and stop_idx is not None:
             if start_idx != 0 or stop_idx != len(mapping.signal):
@@ -247,7 +250,7 @@ end rtl;
         elif start_idx is not None or stop_idx is not None:
             raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
 
-        return f'{repr} <= {self._parse_rhs(statement.rhs)};'
+        return f'{repr} <= {rhs_wrapper(self._parse_rhs(statement.rhs, len(mapping.signal)))};'
 
     def _generate_block(self, mapping: pyhdl_signal.Signal) -> str:
         statements: list[pyhdl_statement.Statement] = []
@@ -303,99 +306,82 @@ end rtl;
             '', # Add new line at the end to separate blocks
         ))
 
-    # def _generate_if(self, mapping, statement, as_if):
-    #     if_opening = 'if'
-    #     else_done = False
+    def _generate_if(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement, as_if: list[Union[pyhdl_statement.Switch.If, pyhdl_statement.Switch.Else]]):
+        if_opening = 'if'
+        else_done = False
 
-    #     ret = ''
-    #     for i, case in enumerate(as_if):
-    #         if else_done:
-    #             raise RuntimeError("New case after 'else'")
+        ret = ''
+        for i, case in enumerate(as_if):
+            if else_done:
+                raise RuntimeError("New case after 'else'")
 
-    #         if isinstance(case, Switch.If):
-    #             opening = if_opening
-    #             if_opening = 'else if'
-    #         elif isinstance(case, Switch.Else):
-    #             opening = 'else'
-    #             else_done = True
+            if isinstance(case, pyhdl_statement.Switch.If):
+                opening = if_opening
+                if_opening = 'elsif'
+                begin = ' then'
+            elif isinstance(case, pyhdl_statement.Switch.Else):
+                opening = 'else'
+                else_done = True
+                begin = ''
 
-    #         # if (
-    #         #     (len(case.statements) == 0) or
-    #         #     (len(case.statements) > 1) or
-    #         #     (len(case.statements) == 1 and not isinstance(case.statements[0], pyhdl_statement.Assign))
-    #         # ):
-    #         begin = ' begin'
-    #         end = 'end'
-    #         # else:
-    #         #     begin = end = ''
+            if case.test is None:
+                test = ''
+            else:
+                test = str(self._parse_rhs(case.test, allow_bool=True))
 
-    #         if case.test is None:
-    #             ret += f'{opening}{begin}'
-    #         else:
-    #             ret += f'{opening} ({self._parse_rhs(case.test)}){begin}'
+                # FIX: If '0'/'1' not allowed apparently
+                if test in ("'0'", "'1'"):
+                    test = f"std_logic'({test}) = std_logic'('1')"
+                test = f' {test}'
 
-    #         if case.statements:
-    #             case_body = self._generate_statements(mapping, case.statements)
-    #         else:
-    #             case_body = ''
+            ret += f'{opening}{test}{begin}'
 
-    #         ret += '\n' + indent(case_body, self.tabs())
-    #         if case_body and end:
-    #             ret += '\n'
-    #         ret += end
+            if case.statements:
+                case_body = self._generate_statements(mapping, case.statements)
+            else:
+                case_body = ''
 
-    #         if i < len(as_if) - 1:
-    #             if end:
-    #                 ret += ' '
-    #             else:
-    #                 ret += '\n'
+            ret += '\n' + indent(case_body, self.tabs())
+            if case_body:
+                ret += '\n'
 
-    #     return ret
+            if i >= len(as_if) - 1:
+                ret += 'end if;'
 
-    # def _generate_switch(self, mapping, statement):
-    #     if statement.as_if is not None:
-    #         return self._generate_if(mapping, statement, statement.as_if)
+        return ret
 
-    #     body = []
-    #     for case, statements in statement.cases.items():
-    #         if isinstance(case, str):
-    #             try:
-    #                 case = int(case, 2)
-    #                 case = f"{len(statement.test)}'d{case}"
-    #             except ValueError:
-    #                 case = f"{len(statement.test)}'b{case}"
+    def _generate_switch(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Switch):
+        if statement.as_if is not None:
+            return self._generate_if(mapping, statement, statement.as_if)
 
-    #         elif isinstance(case, int):
-    #             case = f"{len(statement.test)}'d{case}"
+        cases = statement.cases.copy()
+        cases.setdefault(None, [])
 
-    #         elif case is not None:
-    #             raise RuntimeError(f"Unknown case for switch: {case}")
+        body = []
+        for case, statements in cases.items():
+            if case is None:
+                case = 'others'
+            else:
+                case = case.replace('?', '-')
+                if len(case) == 1:
+                    case = f"'{case}'"
+                else:
+                    case = f'"{case}"'
 
-    #         if case is None:
-    #             case = 'default'
+            body.append(f'{self.tabs()}when {case} =>')
 
-    #         # if len(statements) > 1 or (len(statements) == 1 and not isinstance(statements[0], pyhdl_statement.Assign)):
-    #         begin = ' begin'
-    #         end = f'{self.tabs()}end'
+            if statements:
+                case_body = self._generate_statements(mapping, statements)
+            else:
+                case_body = '-- empty --;'
 
-    #         body.append(f'{self.tabs()}{case}:{begin}')
+            body.append(indent(case_body, self.tabs(2)))
 
-    #         if statements:
-    #             case_body = self._generate_statements(mapping, statements)
-    #         else:
-    #             case_body = '/* empty */;'
-
-    #         body.append(indent(case_body, self.tabs(2)))
-    #         # if end:
-    #         body.append(end)
-
-    #     return '\n'.join((
-    #         f'casez ({self._parse_rhs(statement.test)})',
-    #         *body,
-    #         'endcase',
-    #     ))
-
-    #     return dedent(f'{header}\n{body}\n{footer}')
+        return '\n'.join((
+            f'case ({self._parse_rhs(statement.test)}) is',
+            *body,
+            'end case;',
+        ))
 
     def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
         res = []
@@ -416,8 +402,13 @@ end rtl;
 
         res.append(');')
 
+        if isinstance(submodule, pyhdl_module.InstanceModule):
+            prefix = ''
+        else:
+            prefix = 'entity work.'
+
         return '\n'.join((
-            f'{submodule.name}: {submodule.type}',
+            f'{submodule.name}: {prefix}{submodule.type}',
             indent('\n'.join(res), self.tabs()),
         ))
 
@@ -426,41 +417,58 @@ end rtl;
 
         res = []
 
-        if parameters:
-            # TODO: Check generics types and parse defaults
-            res.append('\n'.join((
-                'generic (',
-                indent(';\n'.join(f'{name} : {type} := {default}' for name, (type, default) in parameters.items()), self.tabs()),
-                ');'
-            )))
+        # if parameters:
+        #     # TODO: Check generics types and parse defaults
+        #     res.append('\n'.join((
+        #         'generic (',
+        #         indent(';\n'.join(f'{name} : {type} := {default}' for name, (type, default) in parameters.items()), self.tabs()),
+        #         ');'
+        #     )))
 
-        res.append('port (')
-        if ports:
-            res.append(
-                indent(';\n'.join(
-                    f'{self._generate_port_from_string(name, len(value.signal), value.direction)}' for name, value in ports.items()
-                ), self.tabs()),
-            )
-        res.append(');')
+        # res.append('port (')
+        # if ports:
+        #     res.append(
+        #         indent(';\n'.join(
+        #             f'{self._generate_port_from_string(name, len(value.signal), value.direction)}' for name, value in ports.items()
+        #         ), self.tabs()),
+        #     )
+        # res.append(');')
 
-        self.submodule_features['components'].extend((
-            f'component {submodule.type} is',
-            indent('\n'.join(res), self.tabs()),
-            '}\nend component;',
-            ''
-        ))
+        # self.submodule_features['components'].extend((
+        #     f'component {submodule.type} is',
+        #     indent('\n'.join(res), self.tabs()),
+        #     '\nend component;',
+        #     ''
+        # ))
 
-    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], allow_signed: bool = True):
-        return str(rhs)
+    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], size : int = None, allow_signed: bool = True, allow_bool : bool = False, as_int : bool = False):
+        if isinstance(rhs, pyhdl_signal.MemoryPort):
+            size = len(rhs.signal)
+
+        if size is None:
+            size = len(rhs)
+
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value
-            if value < 0:
-                value += 2**rhs.width
+            # if value < 0:
+            #     value += 2**rhs.width
 
-            rhs = f"{max(1, rhs.width)}'h{hex(value)[2:]}"
-            if signed:
-                rhs = f'$signed({rhs})'
+            if as_int:
+                rhs = value
+            elif rhs.width == 1:
+                rhs = f"'{value & 1}'"
+            else:
+                width = rhs.width
+                rhs = f'({value}, {width})'
+                if signed:
+                    rhs = f'to_signed{rhs}'
+                    if value > 0:
+                        print('Signed positive:', value)
+                else:
+                    rhs = f'to_unsigned{rhs}'
+
+                rhs = f'std_logic_vector({rhs})'
 
         elif isinstance(rhs, int):
             pass
@@ -469,12 +477,22 @@ end rtl;
             rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
-            signed = allow_signed and rhs.shape().signed
+            signed = allow_signed and rhs.shape().signed and len(rhs) > 1
+            width = len(rhs)
             rhs = rhs.name
-            if signed:
-                rhs = f'$signed({rhs})'
+
+            if width < size:
+                if signed:
+                    fill = f"{rhs}({width - 1})"
+                else:
+                    fill = "'0'"
+                rhs = f"({width - 1} downto 0 => {rhs}, others => {fill})"
+
+            elif width > size:
+                rhs = f'{rhs}({size-1} downto 0)'
+
         elif isinstance(rhs, ast.Cat):
-            rhs = f"{{ {', '.join(self._parse_rhs(part) for part in rhs.parts[::-1])} }}"
+            rhs = f"{' & '.join(self._parse_rhs(part) for part in rhs.parts[::-1])}"
         elif isinstance(rhs, ast.Slice):
             if rhs.start == 0 and rhs.stop >= len(rhs.value):
                 rhs = self._parse_rhs(rhs.value)
@@ -482,9 +500,9 @@ end rtl;
                 if rhs.stop == rhs.start + 1:
                     idx = rhs.start
                 else:
-                    idx = f'{rhs.stop-1}:{rhs.start}'
+                    idx = f'{rhs.stop-1} downto {rhs.start}'
 
-                rhs = f"{self._parse_rhs(rhs.value, allow_signed=False)}[{idx}]"
+                rhs = f"{self._parse_rhs(rhs.value, allow_signed=False)}({idx})"
 
         elif isinstance(rhs, ast.Operator):
             allow_signed = rhs.operator != 'u'
@@ -493,33 +511,57 @@ end rtl;
                 p0 = parsed[0]
                 if rhs.operator == '+':
                     rhs = p0
-                elif rhs.operator in ('~', '-'):
-                    rhs = f'{rhs.operator} {p0}'
+                elif rhs.operator == '~':
+                    rhs = f'not {p0}'
+                elif rhs.operator == '-':
+                    rhs = f'std_logic_vector(-signed({p0}))'
                 elif rhs.operator == 'b':
-                    rhs = f'{p0} != {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
+                    if allow_bool:
+                        rhs = f'{p0} /= {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
+                    else:
+                        rhs = f"'0' when {p0} = {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))} else '1'"
                 elif rhs.operator in ('r|', 'r&', 'r^'):
-                    rhs = f'{rhs.operator[-1]} {p0}'
+                    if len(rhs.operands[0]) == 1:
+                        operator = ''
+                    else:
+                        operator = rhs.operator[-1].replace("|", "or").replace('&', 'and').replace('^', 'xor') + ' '
+
+                    rhs = f'{operator}{p0}'
                 elif rhs.operator == "u":
                     rhs = p0
                 elif rhs.operator == "s":
                     if rhs.operands[0].shape().signed:
                         rhs = p0
                     else:
-                        rhs = f'$signed({p0})'
+                        rhs = f'std_logic_vector(as_unsigned({p0}))'
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
             elif len(rhs.operands) == 2:
                 p0, p1 = parsed
                 if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
-                    rhs = f'{p0} {rhs.operator[0]} {p1}'
-                elif rhs.operator in ('<', '<=', '==', '!=', '>', '>=', '<<', '>>'):
-                    rhs = f'{p0} {rhs.operator} {p1}'
+                    operator = rhs.operator[0].replace("|", "or").replace('&', 'and').replace('^', 'xor')
+                    rhs = f'{p0} {operator} {p1}'
+                elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
+                    operator = rhs.operator.replace('==', '=').replace('!=', '/=')
+                    rhs = f'{p0} {operator} {p1}'
+                    if not allow_bool:
+                        rhs = f"'1' when {rhs} else '0'"
+                elif rhs.operator in ('<<', '>>'):
+                    offset = self._parse_rhs(rhs.operands[1], as_int=True)
+                    if not isinstance(offset, int):
+                        offset = f'to_integer({offset})'
+
+                    if rhs.operator == '>>':
+                        fn = 'shift_right'
+                    else:
+                        fn = 'shift_left'
+                    rhs = f'{fn}({p0}, {offset})'
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
             elif len(rhs.operands) == 3:
                 p0, p1, p2 = parsed
                 if rhs.operator == "m":
-                    rhs = f'{p0} ? {p1} : {p2}'
+                    rhs = f'{p1} when {p0} else {p2}'
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
             else:
@@ -530,7 +572,7 @@ end rtl;
                 raise RuntimeError("Only Parts with stride 1 supported at end stage!")
             rhs = f'{self._parse_rhs(rhs.value)} >> {self._parse_rhs(rhs.offset)}'
         elif isinstance(rhs, pyhdl_signal.MemoryPort):
-            rhs = f'{self._parse_rhs(rhs.signal)}[{self._parse_rhs(rhs.index)}]'
+            rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}(to_integer({self._parse_rhs(rhs.index)})))'
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs))
 
@@ -538,7 +580,7 @@ end rtl;
 
 
 def convert(
-    module: Union[dsl.Module, ir.Fragment],
+    module: Union[ir.Fragment, ir.Elaboratable],
     name: str = 'top',
     ports: list[ast.Signal] = None,
     platform = None,

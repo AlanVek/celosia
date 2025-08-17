@@ -3,7 +3,7 @@ import pyhdl.backend.signal as pyhdl_signal
 import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from textwrap import indent
-from amaranth.hdl import ast, ir, dsl
+from amaranth.hdl import ast, ir
 from typing import Union
 
 class Verilog(HDL):
@@ -251,18 +251,12 @@ endmodule
 
         body = []
         for case, statements in statement.cases.items():
-            if isinstance(case, str):
-                try:
-                    case = int(case, 2)
-                    case = f"{len(statement.test)}'d{case}"
-                except ValueError:
-                    case = f"{len(statement.test)}'b{case}"
-
-            elif isinstance(case, int):
-                case = f"{len(statement.test)}'d{case}"
-
-            elif case is not None:
-                raise RuntimeError(f"Unknown case for switch: {case}")
+            if case is None:
+                case = 'others'
+            elif '?' in case:
+                case = f"{len(statement.test)}'b{case}"
+            else:
+                case = f"{len(statement.test)}'d{int(case, 2)}"
 
             if case is None:
                 case = 'default'
@@ -402,7 +396,7 @@ endmodule
 
 
 def convert(
-    module: Union[dsl.Module, ir.Fragment],
+    module: Union[ir.Fragment, ir.Elaboratable],
     name: str = 'top',
     ports: list[ast.Signal] = None,
     platform = None,

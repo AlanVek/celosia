@@ -3,12 +3,14 @@ import pyhdl.backend.signal as pyhdl_signal
 import pyhdl.backend.module as pyhdl_module
 import pyhdl.backend.statement as pyhdl_statement
 from amaranth.hdl import ast, ir
+from typing import Union
 
 # TODO: If we find multiple signals with same statements, maybe we can merge them into one!
 
 class HDL:
     case_sensitive = False
     portsep = ','
+    top_first = True
 
     template = """{name}
 {ports}{initials}{submodules}{blocks}{assignments}
@@ -25,7 +27,7 @@ class HDL:
     def sanitize(self, name: str) -> str:
         return name
 
-    def convert(self, fragment: ir.Fragment, name: str = 'top', ports: list[ast.Signal] = None, platform=None):
+    def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None):
         m = pyhdl_module.Module(name, fragment, hdl=self)
         m.prepare(ports, platform)
 
@@ -58,11 +60,19 @@ class HDL:
             }.items()},
         }
 
-        res = [self.template.format(**formats)]
+        converted = self.template.format(**formats)
+        res = []
+
+        if self.top_first:
+            res.append(converted)
+
         for submodule, _ in self.module.submodules:
             if isinstance(submodule, pyhdl_module.InstanceModule):
                 continue
             res.append(self._convert_module(submodule))
+
+        if not self.top_first:
+            res.append(converted)
 
         return '\n'.join(res)
 

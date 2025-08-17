@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pyhdl.hdl import HDL
+    import pyhdl.backend.module as pyhdl_module
 
 class Signal:
     def __init__(self, signal: ast.Signal, domain: ir.ClockDomain = None):
@@ -118,3 +119,6 @@ class MemoryPort(Signal):
     @property
     def reset_statement(self):
         return None
+
+    def memory(self, module: "pyhdl_module.Module"):
+        return module.signals.get(self.signal, None)

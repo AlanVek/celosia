@@ -10,7 +10,7 @@ class Module:
 
     allow_remapping = True  # Not strictly necessary, but cocotb needs it to force-assign some signals
 
-    def __init__(self, name: str, fragment: ir.Fragment, hdl: "HDL" = None, invalid_names: set = None, top: bool = True, type: str = None):
+    def __init__(self, name: str, fragment: Union[ir.Fragment, ir.Elaboratable], hdl: "HDL" = None, invalid_names: set = None, top: bool = True, type: str = None):
         if invalid_names is None:
             invalid_names = set([''])
 
