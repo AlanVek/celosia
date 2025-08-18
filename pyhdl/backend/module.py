@@ -434,11 +434,11 @@ class Module:
             divisor = self._fix_rhs_size(divisor, max_size)
 
             # Yosys fix for signed division
-            dividend = self._process_rhs(ast.Mux(
+            dividend = self._fix_rhs_size(ast.Mux(
                 (dividend[-1] == divisor[-1]) | (dividend == ast.Const(0, len(dividend))),
                 dividend,
                 dividend - ast.Mux(divisor[-1], divisor + ast.Const(1, len(divisor)), divisor - ast.Const(1, len(divisor)))
-            ))
+            ), size = len(dividend))
 
         return dividend, divisor
 
@@ -484,7 +484,7 @@ class Module:
                     size += 1
 
                 new_rhs = self._new_signal(ast.Shape(size, _force_sign), prefix = 'resigned')
-                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size))
+                self._add_new_assign(new_rhs, self._fix_rhs_size(rhs, size), stop_idx=size)
                 return new_rhs
 
             if isinstance(rhs, ast.Cat):
@@ -503,7 +503,7 @@ class Module:
             if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
                 if len(rhs) < size or (len(rhs) > size and not _allow_upsize):
                     new_rhs = self._new_signal(ast.Shape(size, signed=rhs.shape().signed), prefix = 'resized')
-                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs))
+                    self._add_new_assign(new_rhs, self._fix_rhs_size(rhs), stop_idx=size)
                     rhs = new_rhs
 
             elif isinstance(rhs, ast.Operator):
@@ -546,7 +546,7 @@ class Module:
 
                         # FIX: Ignore upsize constraint, need to force shift size early to avoid infinitely large signals
                         new_rhs = self._new_signal(size, prefix = 'shifted')
-                        self._add_new_assign(new_rhs, rhs)
+                        self._add_new_assign(new_rhs, rhs, stop_idx=size)
                         rhs = new_rhs
                     else:
                         signed = any(op.shape().signed for op in operands)
@@ -575,7 +575,7 @@ class Module:
 
                 if len(rhs) < size or (len(rhs) > size and not _allow_upsize):
                     new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded_op')
-                    self._add_new_assign(new_rhs, rhs)
+                    self._add_new_assign(new_rhs, rhs, stop_idx=size)
                     rhs = new_rhs
 
             else:
