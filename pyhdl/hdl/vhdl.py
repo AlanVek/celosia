@@ -151,10 +151,7 @@ end rtl;
             dir = f'{dir} '
 
         if type is None:
-            if width > 1:
-                type = f'std_logic_vector ({width - 1} downto 0)'
-            else:
-                type = 'std_logic'
+            type = f'std_logic_vector({width - 1} downto 0)'
 
         return f'{name} : {dir}{type}'
 
@@ -191,9 +188,7 @@ end rtl;
             binary_reset = format(value, f'0{width}b')
             b0 = binary_reset[0]
 
-            if width == 1:
-                reset = f"'{b0}'"
-            elif all(b == b0 for b in binary_reset):
+            if all(b == b0 for b in binary_reset):
                 reset = f"(others => '{b0}')"
             else:
                 reset = f'"{binary_reset}"'
@@ -231,6 +226,11 @@ end rtl;
         start_idx = statement._start_idx
         stop_idx = statement._stop_idx
 
+        if start_idx is None:
+            start_idx = 0
+        if stop_idx is None:
+            stop_idx = len(mapping.signal)
+
         repr = mapping.signal.name
 
         size = len(mapping.signal)
@@ -240,17 +240,11 @@ end rtl;
             repr = f'{repr}(to_integer({self._parse_rhs(mapping.index)}))'
             rhs_wrapper = lambda x: f'{self._get_memory_type(mapping.memory(self.module))[0][0]}({x})'
 
-        elif start_idx is not None and stop_idx is not None:
-            if start_idx != 0 or stop_idx != len(mapping.signal):
-                size = max(1, stop_idx - start_idx)
-                if size == 1:
-                    repr = f'{repr}({start_idx})'
-                else:
-                    repr = f'{repr}({stop_idx-1} downto {start_idx})'
-        elif start_idx is not None or stop_idx is not None:
-            raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
+        if start_idx != 0 or stop_idx != len(mapping.signal):
+            repr = f'{repr}({stop_idx-1} downto {start_idx})'
+            size = min(size, stop_idx - start_idx)
 
-        return f'{repr} <= {rhs_wrapper(self._parse_rhs(statement.rhs, len(mapping.signal)))};'
+        return f'{repr} <= {rhs_wrapper(self._parse_rhs(statement.rhs, size))};'
 
     def _generate_block(self, mapping: pyhdl_signal.Signal) -> str:
         statements: list[pyhdl_statement.Statement] = []
@@ -279,12 +273,12 @@ end rtl;
             else:
                 edge = 'falling'
 
-            triggers.append(f'{edge}_edge({clk})')            
+            triggers.append(f'{edge}_edge({clk}(0))')
 
             if domain.async_reset and domain.rst is not None:
                 rst = self._parse_rhs(domain.rst)
                 sensitivity.append(rst)
-                triggers.append(f'rising_edge({rst})')
+                triggers.append(f'rising_edge({rst}(0))')
 
             triggers = f'({" or ".join(triggers)})'
 
@@ -327,12 +321,16 @@ end rtl;
             if case.test is None:
                 test = ''
             else:
+                idx = lambda x: x
+                if not isinstance(case.test, (ast.Operator, ast.Const, ast.Slice)):
+                    idx = lambda x: f'{x}(0)'
+
                 test = str(self._parse_rhs(case.test, allow_bool=True))
 
                 # FIX: If '0'/'1' not allowed apparently
-                if test in ("'0'", "'1'"):
-                    test = f"std_logic'({test}) = std_logic'('1')"
-                test = f' {test}'
+                if test in ('"0"', '"1"'):
+                    test = f"std_logic'('{test[1]}') = std_logic'('1')"
+                test = f' {idx(test)}'
 
             ret += f'{opening}{test}{begin}'
 
@@ -363,10 +361,7 @@ end rtl;
                 case = 'others'
             else:
                 case = case.replace('?', '-')
-                if len(case) == 1:
-                    case = f"'{case}'"
-                else:
-                    case = f'"{case}"'
+                case = f'"{case}"'
 
             body.append(f'{self.tabs()}when {case} =>')
 
@@ -378,9 +373,9 @@ end rtl;
             body.append(indent(case_body, self.tabs(2)))
 
         return '\n'.join((
-            f'case ({self._parse_rhs(statement.test)}) is',
+            f'case? ({self._parse_rhs(statement.test)}) is',
             *body,
-            'end case;',
+            'end case?;',
         ))
 
     def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
@@ -451,20 +446,14 @@ end rtl;
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value
-            # if value < 0:
-            #     value += 2**rhs.width
 
             if as_int:
                 rhs = value
-            elif rhs.width == 1:
-                rhs = f"'{value & 1}'"
             else:
                 width = rhs.width
                 rhs = f'({value}, {width})'
                 if signed:
                     rhs = f'to_signed{rhs}'
-                    if value > 0:
-                        print('Signed positive:', value)
                 else:
                     rhs = f'to_unsigned{rhs}'
 
@@ -494,14 +483,13 @@ end rtl;
         elif isinstance(rhs, ast.Cat):
             rhs = f"{' & '.join(self._parse_rhs(part) for part in rhs.parts[::-1])}"
         elif isinstance(rhs, ast.Slice):
-            if rhs.start == 0 and rhs.stop >= len(rhs.value):
+            if (rhs.start == 0 and rhs.stop >= len(rhs.value)) and not allow_bool:
                 rhs = self._parse_rhs(rhs.value)
             else:
-                if rhs.stop == rhs.start + 1:
+                if allow_bool and (rhs.stop == rhs.start + 1):
                     idx = rhs.start
                 else:
                     idx = f'{rhs.stop-1} downto {rhs.start}'
-
                 rhs = f"{self._parse_rhs(rhs.value, allow_signed=False)}({idx})"
 
         elif isinstance(rhs, ast.Operator):
@@ -519,33 +507,40 @@ end rtl;
                     if allow_bool:
                         rhs = f'{p0} /= {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
                     else:
-                        rhs = f"'0' when {p0} = {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))} else '1'"
+                        rhs = f'"0" when {p0} = {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))} else "1"'
                 elif rhs.operator in ('r|', 'r&', 'r^'):
                     if len(rhs.operands[0]) == 1:
-                        operator = ''
+                        rhs = str(p0)
                     else:
                         operator = rhs.operator[-1].replace("|", "or").replace('&', 'and').replace('^', 'xor') + ' '
+                        rhs = f"(0=>{operator}{p0}, others=>'0')"
 
-                    rhs = f'{operator}{p0}'
                 elif rhs.operator == "u":
                     rhs = p0
                 elif rhs.operator == "s":
                     if rhs.operands[0].shape().signed:
                         rhs = p0
                     else:
-                        rhs = f'std_logic_vector(as_unsigned({p0}))'
+                        rhs = f'std_logic_vector(signed({p0}))'
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
             elif len(rhs.operands) == 2:
                 p0, p1 = parsed
+
+                resize = lambda x: x
+                if rhs.operator in ('+', '-', '*', '//', '%'):
+                    if any(len(operand) <= size for operand in rhs.operands):
+                        resize = lambda x: f'std_logic_vector(resize({x}, {size}))'
+
                 if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
                     operator = rhs.operator[0].replace("|", "or").replace('&', 'and').replace('^', 'xor')
-                    rhs = f'{p0} {operator} {p1}'
+                    rhs = resize(f'{p0} {operator} {p1}')
                 elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
                     operator = rhs.operator.replace('==', '=').replace('!=', '/=')
                     rhs = f'{p0} {operator} {p1}'
                     if not allow_bool:
-                        rhs = f"'1' when {rhs} else '0'"
+                        rhs = f'"1" when {rhs} else "0"'
                 elif rhs.operator in ('<<', '>>'):
                     offset = self._parse_rhs(rhs.operands[1], as_int=True)
                     if not isinstance(offset, int):
@@ -561,7 +556,20 @@ end rtl;
             elif len(rhs.operands) == 3:
                 p0, p1, p2 = parsed
                 if rhs.operator == "m":
-                    rhs = f'{p1} when {p0} else {p2}'
+                    if any(len(operand) > size for operand in rhs.operands[1:]):
+                        p1 = f'{p1}({size-1} downto 0)'
+                        p2 = f'{p2}({size-1} downto 0)'
+
+                    if isinstance(rhs.operands[0], ast.Const):
+                        if rhs.operands[0].value == 0:
+                            rhs = str(p2)
+                        else:
+                            rhs = str(p1)
+                    else:
+                        idx = lambda x: x
+                        if not isinstance(rhs.operands[0], ast.Operator):
+                            idx = lambda x: f'{x}(0)'
+                        rhs = f'{p1} when {idx(p0)} else {p2}'
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
             else:
@@ -572,7 +580,8 @@ end rtl;
                 raise RuntimeError("Only Parts with stride 1 supported at end stage!")
             rhs = f'{self._parse_rhs(rhs.value)} >> {self._parse_rhs(rhs.offset)}'
         elif isinstance(rhs, pyhdl_signal.MemoryPort):
-            rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}(to_integer({self._parse_rhs(rhs.index)})))'
+            index = f'to_integer({self._parse_rhs(rhs.index)}'
+            rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}({index}))'
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs))
 

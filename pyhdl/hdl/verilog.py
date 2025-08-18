@@ -149,6 +149,11 @@ endmodule
         start_idx = statement._start_idx
         stop_idx = statement._stop_idx
 
+        if start_idx is None:
+            start_idx = 0
+        if stop_idx is None:
+            stop_idx = len(mapping.signal)
+
         repr = mapping.signal.name
 
         size = len(mapping.signal)
@@ -156,15 +161,12 @@ endmodule
         if isinstance(mapping, pyhdl_signal.MemoryPort):
             repr = f'{repr}[{self._parse_rhs(mapping.index)}]'
 
-        elif start_idx is not None and stop_idx is not None:
-            if start_idx != 0 or stop_idx != len(mapping.signal):
-                size = max(1, stop_idx - start_idx)
-                if size == 1:
-                    repr = f'{repr}[{start_idx}]'
-                else:
-                    repr = f'{repr}[{stop_idx-1}:{start_idx}]'
-        elif start_idx is not None or stop_idx is not None:
-            raise RuntimeError(f"Invalid assignment, start_idx and stop_idx must be both None or have value ({start_idx} - {stop_idx})")
+        if start_idx != 0 or stop_idx != len(mapping.signal):
+            size = max(1, stop_idx - start_idx)
+            if size == 1:
+                repr = f'{repr}[{start_idx}]'
+            else:
+                repr = f'{repr}[{stop_idx-1}:{start_idx}]'
 
         return f'{prefix}{repr} {symbol} {self._parse_rhs(statement.rhs)};'
 
@@ -252,7 +254,7 @@ endmodule
         body = []
         for case, statements in statement.cases.items():
             if case is None:
-                case = 'others'
+                case = 'default'
             elif '?' in case:
                 case = f"{len(statement.test)}'b{case}"
             else:
