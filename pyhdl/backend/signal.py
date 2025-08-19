@@ -5,7 +5,7 @@ class Signal:
     def __init__(self, signal: ast.Signal, domain: ir.ClockDomain = None):
         self.signal = signal
         self.domain = domain
-        self.statements = []
+        self.statements: list[pyhdl_statement.Statement] = []
 
         self._no_reset_statement = False
 
