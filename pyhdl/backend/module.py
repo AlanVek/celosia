@@ -419,7 +419,7 @@ class Module:
             elif isinstance(rhs, ast.ArrayProxy):
                 rhs.index = self._fix_rhs_size(rhs.index)
                 for i, elem in enumerate(rhs.elems):
-                    rhs.elems[i] = self._fix_rhs_size(elem)
+                    rhs.elems[i] = self._fix_rhs_size(elem, size)
 
             if isinstance(rhs, (ast.Signal, ast.Cat, ast.Slice, ast.Part, ast.ArrayProxy)):
                 if len(rhs) < size or (len(rhs) > size and not _allow_upsize):
