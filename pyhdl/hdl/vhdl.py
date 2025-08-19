@@ -57,6 +57,9 @@ end rtl;
         self._blackboxes = blackboxes
         self._types : dict[pyhdl_signal.Memory, list[tuple[str, str]]] = {}
 
+        if blackboxes is not None:
+            raise NotImplementedError("Blackboxes not supported yet!")
+
     @classmethod
     def sanitize(cls, name: str) -> str:
         name = super().sanitize(name).strip()
