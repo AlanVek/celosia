@@ -22,7 +22,7 @@ class HDL:
         self.submodule_features: dict[str, list] = {}
 
         self.module: pyhdl_module.Module = None
-        self.invalid_names = set()
+        self.invalid_names: set[str] = set()
 
     def sanitize(self, name: str) -> str:
         return name
@@ -31,7 +31,7 @@ class HDL:
     def _change_case(cls, name: str) -> str:
         return name if cls.case_sensitive else name.lower()
 
-    def _sanitize_something(self, name: str, extra: set = None) -> str:
+    def _sanitize_something(self, name: str, extra: set[str] = None) -> str:
         invalid = self.invalid_names.copy()
         if extra is not None:
             invalid.update(extra)
@@ -59,14 +59,14 @@ class HDL:
 
         return name
 
-    def _sanitize_name(self, entry: Union[pyhdl_module.Module, ast.Signal], extra: set = None):
+    def _sanitize_name(self, entry: Union[pyhdl_module.Module, ast.Signal], extra: set[str] = None):
         entry.name = self._sanitize_something(self.sanitize(entry.name), extra=extra)
 
-    def _sanitize_type(self, entry: pyhdl_module.Module, extra: set = None) -> None:
+    def _sanitize_type(self, entry: pyhdl_module.Module, extra: set[str] = None) -> None:
         entry.type = self._sanitize_something(self.sanitize(entry.type), extra=extra)
 
     @classmethod
-    def _add_invalid(cls, invalid: set, entry: str):
+    def _add_invalid(cls, invalid: set[str], entry: str):
         invalid.add(cls._change_case(entry))
 
     def _cleanup_names(self, module: pyhdl_module.Module):
@@ -74,7 +74,7 @@ class HDL:
             self._sanitize_name(module)
             self._add_invalid(self.invalid_names, module.name)
 
-        local = set()
+        local: set[str] = set()
 
         # For toplevel, ports have priority
         for port in module.ports:

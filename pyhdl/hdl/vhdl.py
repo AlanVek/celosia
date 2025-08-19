@@ -55,8 +55,9 @@ end rtl;
     def __init__(self, spaces: int = 4, blackboxes: list[dict[str, Union[int, str, tuple]]] = None):
         super().__init__(spaces=spaces)
         self._blackboxes = blackboxes
-        self._types : dict[pyhdl_signal.Memory, list[tuple[int, str]]] = {}
-        self._typenames : list[str] = []
+        self._types: dict[pyhdl_signal.Memory, list[tuple[int, str]]] = {}
+        self._typenames: list[str] = []
+        self._processes: set[str] = set()
 
         if blackboxes is not None:
             raise NotImplementedError("Blackboxes not supported yet!")
@@ -98,8 +99,11 @@ end rtl;
         if name[0].isnumeric():
             name = 'esc_' + name
 
-        while name in self._typenames:
-            name = 'esc_' + name
+        # TODO: This is not populated yet
+        # while name in self._typenames:
+        #     name = 'esc_' + name
+        # while name in self._processes:
+        #     name = 'esc_' + name
 
         return name
 
@@ -107,6 +111,7 @@ end rtl;
         super().reset()
         self._types.clear()
         self._typenames.clear()
+        self._processes.clear()
 
         self.signal_features['types'] = []
         self.submodule_features['components'] = []
@@ -311,8 +316,11 @@ end rtl;
             header = footer = ''
 
         # TODO: Check that process name doesn't collide with some name
+        new_process = f'p_{mapping.signal.name}'
+        self._processes.add(new_process)
+
         return '\n'.join((
-            f'p_{mapping.signal.name}: process ({", ".join(sensitivity)})',
+            f'{new_process}: process ({", ".join(sensitivity)})',
             'begin',
             *([indent(header, self.tabs())] if header else []),
             indent(self._generate_statements(mapping, statements), self.tabs(tabs)),
@@ -460,7 +468,7 @@ end rtl;
         #     ''
         # ))
 
-    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], size : int = None, allow_signed: bool = True, allow_bool : bool = False, as_int : bool = False, operation=False):
+    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], size: int = None, allow_signed: bool = True, allow_bool: bool = False, operation: bool = False):
         if isinstance(rhs, pyhdl_signal.MemoryPort):
             size = len(rhs.signal)
 

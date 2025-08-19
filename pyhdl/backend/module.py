@@ -20,7 +20,7 @@ class Module:
 
         self.submodules: list[tuple[Module, dict]] = []
         self.signals: dict[ast.Signal, pyhdl_signal.Signal] = ast.SignalDict()
-        self.ports : list[pyhdl_signal.Port] = []
+        self.ports: list[pyhdl_signal.Port] = []
         self._remapped = ast.SignalDict()
 
     @property
@@ -145,7 +145,7 @@ class Module:
             return rhs[start : stop]
 
     def _process_lhs(self, lhs: ast.Value, rhs: ast.Value, start_idx: int = None, stop_idx: int = None) -> list[tuple]:
-        res : list[tuple] = []
+        res: list[tuple] = []
 
         # TODO: Review start_idx/stop_idx, maybe it's better to use intermediate signals!
 
@@ -602,7 +602,7 @@ class Module:
                     self.signals[signal].add_statement(statement)
 
     def _process_submodule_instance(self, subfragment: ir.Fragment, name: str) -> tuple["Module", dict]:
-        ports : dict[str, ast.Value] = {}
+        ports: dict[str, ast.Value] = {}
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(subfragment, name)
@@ -732,7 +732,7 @@ class MemoryModule(InstanceModule):
     def __init__(self, name: str, fragment: ir.Instance, top: bool = True):
         super().__init__(name, fragment, top=top)
 
-        self._mem : pyhdl_signal.Memory = None
+        self._mem: pyhdl_signal.Memory = None
         self._arr = ast.SignalSet()
 
         self._r_ports: list[MemoryModule.ReadPort] = self.ReadPort.from_fragment(
@@ -742,11 +742,11 @@ class MemoryModule(InstanceModule):
             fragment, domain_resolver=self._find_domain_from_clock
         )
 
-        self._width : int = fragment.parameters.get('WIDTH', None)
+        self._width: int = fragment.parameters.get('WIDTH', None)
         if self._width is None:
             raise RuntimeError(f"Failed to find width for memory {self.name}")
 
-        self._size : int = fragment.parameters.get('SIZE', None)
+        self._size: int = fragment.parameters.get('SIZE', None)
         if self._size is None:
             raise RuntimeError(f"Failed to find size for memory {self.name}")
 
