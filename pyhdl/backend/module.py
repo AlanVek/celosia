@@ -371,9 +371,14 @@ class Module:
                 rhs.operands[i] = self._process_rhs(operand, **kwargs)
 
             if not _division_fix and rhs.operator == '//' and len(rhs.operands) == 2:
-                dividend, divisor = self._signed_division_fix(rhs)
+                dividend, divisor, signed = self._signed_division_fix(rhs)
                 kwargs['_division_fix'] = True
-                new_rhs = self._process_rhs(ast.Mux(divisor == ast.Const(0, len(divisor)), ast.Const(0, len(rhs)), dividend//divisor), **kwargs)
+
+                if signed:
+                    signed = lambda x: ast.signed(x)
+                else:
+                    signed = lambda x: x
+                new_rhs = self._process_rhs(ast.Mux(divisor == ast.Const(0, signed(len(divisor))), ast.Const(0, signed(len(rhs))), dividend//divisor), **kwargs)
 
             else:
                 new_rhs = self._new_signal(rhs.shape(), prefix='operand')
@@ -421,7 +426,11 @@ class Module:
     def _signed_division_fix(self, rhs: ast.Operator) -> tuple[ast.Value, ast.Value]:
         dividend, divisor = rhs.operands
 
+        signed = False
+
         if any(operand.shape().signed for operand in rhs.operands):
+            signed = True
+
             max_size = max(len(op) for op in rhs.operands) + 2
 
             if not dividend.shape().signed:
@@ -440,7 +449,7 @@ class Module:
                 dividend - ast.Mux(divisor[-1], divisor + ast.Const(1, len(divisor)), divisor - ast.Const(1, len(divisor)))
             ), size = len(dividend))
 
-        return dividend, divisor
+        return dividend, divisor, signed
 
     def _fix_rhs_size(self, rhs: ast.Value, size: int = None, *, _force_sign: bool = None, _allow_upsize: bool = False):
         if size is None:
@@ -553,7 +562,7 @@ class Module:
                         for i, operand in enumerate(rhs.operands):
                             rhs.operands[i] = self._fix_rhs_size(operand, _allow_upsize=True, _force_sign=signed)
 
-                        signed = any(op.shape().signed for op in operands)
+                        signed = any(op.shape().signed for op in rhs.operands)
                         max_size = max(size, max(len(op) for op in rhs.operands))
                         rhs.operands = [
                             self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands
