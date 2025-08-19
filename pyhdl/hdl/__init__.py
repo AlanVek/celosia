@@ -22,14 +22,90 @@ class HDL:
         self.submodule_features: dict[str, list] = {}
 
         self.module: pyhdl_module.Module = None
+        self.invalid_names = set()
 
-    @classmethod
     def sanitize(self, name: str) -> str:
         return name
 
+    @classmethod
+    def _change_case(cls, name: str) -> str:
+        return name if cls.case_sensitive else name.lower()
+
+    def _sanitize_something(self, name: str, extra: set = None) -> str:
+        invalid = self.invalid_names.copy()
+        if extra is not None:
+            invalid.update(extra)
+        if not name:
+            name = 'unnamed'
+
+        curr_num = ''
+        curr_idx = len(name) - 1
+        while curr_idx >= 0 and name[curr_idx].isnumeric():
+            curr_num = name[curr_idx] + curr_num
+            curr_idx -= 1
+
+        if curr_num:
+            idx = int(curr_num) + 1
+            if self._change_case(name) in invalid:
+                name = f'{name[:curr_idx+1]}{idx}'
+                idx += 1
+        else:
+            idx = 0
+
+        _name = name
+        while self._change_case(name) in invalid:
+            name = f'{_name}{idx}'
+            idx += 1
+
+        return name
+
+    def _sanitize_name(self, entry: Union[pyhdl_module.Module, ast.Signal], extra: set = None):
+        entry.name = self._sanitize_something(self.sanitize(entry.name), extra=extra)
+
+    def _sanitize_type(self, entry: pyhdl_module.Module, extra: set = None) -> None:
+        entry.type = self._sanitize_something(self.sanitize(entry.type), extra=extra)
+
+    @classmethod
+    def _add_invalid(cls, invalid: set, entry: str):
+        invalid.add(cls._change_case(entry))
+
+    def _cleanup_names(self, module: pyhdl_module.Module):
+        if module.top:
+            self._sanitize_name(module)
+            self._add_invalid(self.invalid_names, module.name)
+
+        local = set()
+
+        # For toplevel, ports have priority
+        for port in module.ports:
+            if module.top:
+                self._sanitize_name(port.signal, extra=local)
+            self._add_invalid(local, port.signal.name)
+
+        for submodule, _ in module.submodules:
+            self._sanitize_name(submodule, extra=local)
+            self._add_invalid(local, submodule.name)
+
+            if not isinstance(submodule, pyhdl_module.InstanceModule):
+                self._sanitize_type(submodule, extra=local)
+            self._add_invalid(self.invalid_names, submodule.type)
+
+        for signal, mapping in module.signals.items():
+            if not isinstance(mapping, pyhdl_signal.Port):
+                self._sanitize_name(signal, extra=local)
+            self._add_invalid(local, signal.name)
+
+        for submodule, _ in module.submodules:
+            self._cleanup_names(submodule)
+
     def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None):
-        m = pyhdl_module.Module(name, fragment, hdl=self)
+        m = pyhdl_module.Module(name, fragment)
         m.prepare(ports, platform)
+
+        self.invalid_names.clear()
+        self.invalid_names.add('')
+
+        self._cleanup_names(m)
 
         return self._convert_module(m)
 

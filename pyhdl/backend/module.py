@@ -1,20 +1,13 @@
 from amaranth.hdl import ast, ir
 import pyhdl.backend.signal as pyhdl_signal
 import pyhdl.backend.statement as pyhdl_statement
-from typing import TYPE_CHECKING, Union
-
-if TYPE_CHECKING:
-    from pyhdl.hdl import HDL
+from typing import Union
 
 class Module:
 
     allow_remapping = True  # Not strictly necessary, but cocotb needs it to force-assign some signals
 
-    def __init__(self, name: str, fragment: Union[ir.Fragment, ir.Elaboratable], hdl: "HDL" = None, invalid_names: set = None, top: bool = True, type: str = None):
-        if invalid_names is None:
-            invalid_names = set([''])
-
-        self.invalid_names = invalid_names
+    def __init__(self, name: str, fragment: Union[ir.Fragment, ir.Elaboratable], top: bool = True, type: str = None):
         self.top = top
 
         self.name = name
@@ -24,8 +17,6 @@ class Module:
             self.fragment = None
         else:
             self.fragment = fragment
-
-        self.hdl = hdl
 
         self.submodules: list[tuple[Module, dict]] = []
         self.signals: dict[ast.Signal, pyhdl_signal.Signal] = ast.SignalDict()
@@ -57,80 +48,11 @@ class Module:
     def parameters(self) -> dict:
         return {}
 
-    @property
-    def case_sensitive(self) -> bool:
-        return bool(getattr(self.hdl, 'case_sensitive', False))
-
-    def _change_case(self, name: str) -> str:
-        return name if self.case_sensitive else name.lower()
-
-    def _sanitize(self, name: str, extra: set = None) -> str:
-        invalid = self.invalid_names.copy()
-        if extra is not None:
-            invalid.update(extra)
-        if not name:
-            name = 'unnamed'
-
-        curr_num = ''
-        curr_idx = len(name) - 1
-        while curr_idx >= 0 and name[curr_idx].isnumeric():
-            curr_num = name[curr_idx] + curr_num
-            curr_idx -= 1
-
-        if curr_num:
-            idx = int(curr_num) + 1
-            if self._change_case(name) in invalid:
-                name = f'{name[:curr_idx+1]}{idx}'
-                idx += 1
-        else:
-            idx = 0
-
-        _name = name
-        while self._change_case(name) in invalid:
-            name = f'{_name}{idx}'
-            idx += 1
-
-        return name
-
-    def sanitize_module(self, name: str, extra: set = None) -> str:
-        if self.hdl is not None:
-            name = self.hdl.sanitize(name)
-        return self._sanitize(name, extra=extra)
-
-    def _sanitize_signal(self, signal: ast.Signal, extra: set = None) -> None:
-        signal.name = self._sanitize(pyhdl_signal.Signal.sanitize(signal.name, hdl=self.hdl), extra=extra)
-
     def _reset(self) -> None:
         self.signals.clear()
         self.submodules.clear()
         self.ports.clear()
         self._remapped.clear()
-        if self.top:
-            self.invalid_names.clear()
-
-    def _cleanup_signal_names(self) -> None:
-        extra = set()
-
-        # For toplevel, ports have priority
-        for port in self.ports:
-            if self.top:
-                self._sanitize_signal(port.signal, extra=extra)
-            extra.add(self._change_case(port.signal.name))
-
-        for submodule, _ in self.submodules:
-            submodule.name = self.sanitize_module(submodule.name, extra=extra)
-            extra.add(self._change_case(submodule.name))
-            if not isinstance(submodule, InstanceModule):
-                submodule.type = self.sanitize_module(submodule.type, extra=extra)
-            self.invalid_names.add(self._change_case(submodule.type))
-
-        for signal, mapping in self.signals.items():
-            if not isinstance(mapping, pyhdl_signal.Port):
-                self._sanitize_signal(signal, extra=extra)
-            extra.add(self._change_case(signal.name))
-
-        for submodule, _ in self.submodules:
-            submodule._cleanup_signal_names()
 
     def _get_signal(self, signal: ast.Signal):
         s = self.signals.get(signal, None)
@@ -141,7 +63,6 @@ class Module:
     def _new_signal(self, shape: Union[int, ast.Shape] = 1, prefix: str = None, mapping: type = pyhdl_signal.Signal, **kwargs) -> ast.Value:
         name = prefix or 'tmp'
         new = ast.Signal(shape, name=name)
-        # self._sanitize_signal(new)
         self.signals[new] = mapping(new, **kwargs)
 
         return new
@@ -154,7 +75,6 @@ class Module:
     def _add_new_statement(self, left: ast.Value, statement: pyhdl_statement.Statement) -> None:
         ########################
         if left not in self.signals:
-            # self._sanitize_signal(left)
             self.signals[left] = pyhdl_signal.Signal(left)
         ########################
         remap = self._remapped.get(left, None)
@@ -168,21 +88,15 @@ class Module:
     def prepare(self, ports: list = None, platform=None) -> None:
         if self.top:
             self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
-            self.name = self.sanitize_module(self.name)
-            self.invalid_names.add(self._change_case(self.name))
 
         self._prepare_signals()
         self._prepare_statements()
         self._prepare_submodules()
 
-        if self.top:
-            self._cleanup_signal_names()
-
     def _prepare_signals(self) -> None:
 
         # TODO: Possibly create intermediate signals so that ports are always wire
         for port, direction in self.fragment.ports.items():
-            # self._sanitize_signal(port)
             self.signals[port] = pyhdl_signal.Port(port, direction=direction)
             self.ports.append(self.signals[port])
 
@@ -192,7 +106,6 @@ class Module:
 
             entry = self.signals.get(signal, None)
             if entry is None:
-                # self._sanitize_signal(signal)
                 entry = self.signals[signal] = pyhdl_signal.Signal(signal)
 
             if self.allow_remapping and domain is not None:
@@ -335,7 +248,6 @@ class Module:
         elif isinstance(rhs, ast.Signal):
             # Fix: Can happen with submodule ports
             if rhs not in self.signals:
-                # self._sanitize_signal(rhs)
                 self.signals[rhs] = pyhdl_signal.Signal(rhs)
 
         elif isinstance(rhs, ast.Cat):
@@ -666,7 +578,7 @@ class Module:
         if cls is None:
             cls = Module
 
-        return cls(name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False, **kwargs)
+        return cls(name, fragment, top=False, **kwargs)
 
     def _process_memory(self, subfragment: ir.Fragment, name: str):
         m = self._submodule_create(name, subfragment, MemoryModule)
@@ -751,8 +663,8 @@ class Module:
                 self.submodules.append((submodule, ports))
 
 class InstanceModule(Module):
-    def __init__(self, name: str, fragment: ir.Fragment, hdl: "HDL" = None, invalid_names: set = None, top: bool = True):
-        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top, type=fragment.type)
+    def __init__(self, name: str, fragment: ir.Fragment, top: bool = True):
+        super().__init__(name, fragment, top=top, type=fragment.type)
 
     @property
     def parameters(self):
@@ -817,8 +729,8 @@ class MemoryModule(InstanceModule):
         def from_fragment(cls, fragment: ir.Instance, domain_resolver) -> list["MemoryModule.WritePort"]:
             return super().from_fragment(fragment, 'WR', domain_resolver)
 
-    def __init__(self, name: str, fragment: ir.Instance, hdl: "HDL" = None, invalid_names: set = None, top: bool = True):
-        super().__init__(name, fragment, hdl=hdl, invalid_names=invalid_names, top=top)
+    def __init__(self, name: str, fragment: ir.Instance, top: bool = True):
+        super().__init__(name, fragment, top=top)
 
         self._mem : pyhdl_signal.Memory = None
         self._arr = ast.SignalSet()
@@ -864,7 +776,7 @@ class MemoryModule(InstanceModule):
 
         for rport in self._r_ports:
             self.signals[rport.data].domain = rport.domain
-            rport.proxy = pyhdl_signal.MemoryPort(self._mem.signal, index = rport.index)
+            rport.proxy = pyhdl_signal.MemoryPort(self._mem.signal, memory = self._mem, index = rport.index)
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
                 self.signals.pop(rport.enable, None)
@@ -875,6 +787,7 @@ class MemoryModule(InstanceModule):
                 prefix = f'{self.name}_internal',    # Doesn't matter, signal won't really exist
                 mapping = pyhdl_signal.MemoryPort,
                 domain = wport.domain,
+                memory = self._mem,
                 index = wport.index,
             )
             self.signals[wport.proxy].signal = self._mem.signal    # Hacky!

@@ -43,8 +43,7 @@ class Verilog(HDL):
 endmodule
 """
 
-    @classmethod
-    def sanitize(cls, name: str) -> str:
+    def sanitize(self, name: str) -> str:
         name = super().sanitize(name).strip()
 
         # TODO: Update sanitization for Verilog
@@ -66,11 +65,11 @@ endmodule
         for old, new in replace_map.items():
             name = name.replace(old, new)
 
-        while name in cls.protected:
+        while name in self.protected:
             name = 'esc_' + name
 
         if not name:
-            name = cls.sanitize('unnamed')
+            name = self.sanitize('unnamed')
 
         if name[0].isnumeric():
             name = 'esc_' + name

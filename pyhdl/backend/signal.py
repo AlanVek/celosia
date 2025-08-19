@@ -1,10 +1,5 @@
 import pyhdl.backend.statement as pyhdl_statement
 from amaranth.hdl import ast, ir
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pyhdl.hdl import HDL
-    import pyhdl.backend.module as pyhdl_module
 
 class Signal:
     def __init__(self, signal: ast.Signal, domain: ir.ClockDomain = None):
@@ -48,12 +43,6 @@ class Signal:
 
         return pyhdl_statement.Assign(ast.Const(self.signal.reset, len(self.signal)))
 
-    @staticmethod
-    def sanitize(name, hdl: "HDL" = None):
-        if hdl is not None:
-            name = hdl.sanitize(name)
-        return name
-
     def add_statement(self, statement):
         if not isinstance(statement, list):
             statement = [statement]
@@ -78,6 +67,9 @@ class Signal:
 
     def _rhs_signals(self):
         return [self.signal]
+
+    def __len__(self):
+        return len(self.signal)
 
 class RemappedSignal(Signal):
     def __init__(self, signal: ast.Signal, sync_signal: ast.Signal):
@@ -111,14 +103,12 @@ class Memory(Signal):
         return None
 
 class MemoryPort(Signal):
-    def __init__(self, signal: ast.Signal, index: ast.Signal, domain: ir.ClockDomain = None):
+    def __init__(self, signal: ast.Signal, memory: Memory, index: ast.Signal, domain: ir.ClockDomain = None):
         super().__init__(signal, domain)
+        self.memory = memory
         self.index = index
         self.domain = domain
 
     @property
     def reset_statement(self):
         return None
-
-    def memory(self, module: "pyhdl_module.Module"):
-        return module.signals.get(self.signal, None)

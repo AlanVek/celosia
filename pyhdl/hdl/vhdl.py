@@ -55,13 +55,13 @@ end rtl;
     def __init__(self, spaces: int = 4, blackboxes: list[dict[str, Union[int, str, tuple]]] = None):
         super().__init__(spaces=spaces)
         self._blackboxes = blackboxes
-        self._types : dict[pyhdl_signal.Memory, list[tuple[str, str]]] = {}
+        self._types : dict[pyhdl_signal.Memory, list[tuple[int, str]]] = {}
+        self._typenames : list[str] = []
 
         if blackboxes is not None:
             raise NotImplementedError("Blackboxes not supported yet!")
 
-    @classmethod
-    def sanitize(cls, name: str) -> str:
+    def sanitize(self, name: str) -> str:
         name = super().sanitize(name).strip()
 
         replace_map = {
@@ -89,13 +89,16 @@ end rtl;
         if name and name[-1] == '_':
             name = name[:-1]
 
-        while name in cls.protected:
+        while name in self.protected:
             name = 'esc_' + name
 
         if not name:
-            name = cls.sanitize('unnamed')
+            name = self.sanitize('unnamed')
 
         if name[0].isnumeric():
+            name = 'esc_' + name
+
+        while name in self._typenames:
             name = 'esc_' + name
 
         return name
@@ -103,6 +106,7 @@ end rtl;
     def reset(self):
         super().reset()
         self._types.clear()
+        self._typenames.clear()
 
         self.signal_features['types'] = []
         self.submodule_features['components'] = []
@@ -115,9 +119,10 @@ end rtl;
         self._types[mapping] = []
 
         # TODO: Check that type doesn't collide with some name
-        for i, size in enumerate(([len(signal)] if len(signal) > 1 else []) + [depth]):
+        for i, size in enumerate([len(signal), depth]):
             next_type = f'type_{signal.name}_{i}'
-            self._types[mapping].append((next_type, f'array (0 to {size - 1}) of {new_type}'))
+            self._types[mapping].append((len(self._typenames), f'array (0 to {size - 1}) of {new_type}'))
+            self._typenames.append(next_type)
             new_type = next_type
 
     def _get_memory_type(self, mapping: pyhdl_signal.Signal) -> list[tuple[str, str]]:
@@ -129,13 +134,21 @@ end rtl;
 
         return self._types[mapping]
 
+    def _get_memory_typename(self, mapping: pyhdl_signal.Signal, idx: int) -> list[tuple[str, str]]:
+        entry = self._get_memory_type(mapping)
+
+        if entry is None:
+            return None
+
+        return self._typenames[entry[idx][0]]
+
     def _generate_signal_features(self, mapping: pyhdl_signal.Signal):
         types = self._get_memory_type(mapping)
         if types is None:
             return
 
-        for name, description in types:
-            self.signal_features['types'].append(f'type {name} is {description};')
+        for idx, description in types:
+            self.signal_features['types'].append(f'type {self._typenames[idx]} is {description};')
 
     def _generate_signal_from_string(self, name: str, width: Union[int, ast.Shape], dir: str = None, type=None) -> str:
         # TODO: Check what to do with zero-width signals
@@ -163,7 +176,7 @@ end rtl;
             if len(mapping.init) <= 0:
                 raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
 
-            type = self._get_memory_type(mapping)[-1][0]
+            type = self._get_memory_typename(mapping, -1)
         else:
             type = None
 
@@ -246,7 +259,7 @@ end rtl;
 
         if isinstance(mapping, pyhdl_signal.MemoryPort):
             repr = f'{repr}(to_integer({self._parse_rhs(mapping.index)}))'
-            rhs_wrapper = lambda x: f'{self._get_memory_type(mapping.memory(self.module))[0][0]}({x})'
+            rhs_wrapper = lambda x: f'{self._get_memory_typename(mapping.memory, 0)}({x})'
 
         if start_idx != 0 or stop_idx != len(mapping.signal):
             repr = f'{repr}({stop_idx-1} downto {start_idx})'
