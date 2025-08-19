@@ -2,13 +2,17 @@ from amaranth.hdl import ast
 from typing import Union
 
 class Statement:
-    pass
+    def _rhs_signals(self) -> ast.SignalSet:
+        return ast.SignalSet()
 
 class Assign(Statement):
     def __init__(self, rhs: ast.Value, start_idx: int = None, stop_idx: int = None):
         self.rhs = rhs
         self._start_idx = start_idx
         self._stop_idx = stop_idx
+
+    def _rhs_signals(self) -> ast.SignalSet:
+        return super()._rhs_signals() | self.rhs._rhs_signals()
 
 class Switch(Statement):
 
@@ -105,3 +109,13 @@ class Switch(Statement):
             res.append(self.If(self.test[bit], statements))
 
         return res
+
+    def _rhs_signals(self) -> ast.SignalSet:
+        ret = super()._rhs_signals()
+
+        ret.update(self.test._rhs_signals())
+        for statements in self.cases.values():
+            for statement in statements:
+                ret.update(statement._rhs_signals())
+
+        return ret
