@@ -270,7 +270,13 @@ end rtl;
             repr = f'{repr}({stop_idx-1} downto {start_idx})'
             size = min(size, stop_idx - start_idx)
 
-        return f'{repr} <= {rhs_wrapper(self._parse_rhs(statement.rhs, size))};'
+        if mapping.domain is None:
+            posfix = ''
+        else:
+            # FIX: Need to add small delay for simulation
+            posfix = 'after 1 fs'
+
+        return f'{repr} <= {rhs_wrapper(self._parse_rhs(statement.rhs, size))} {posfix};'
 
     def _generate_block(self, mapping: pyhdl_signal.Signal) -> str:
         statements: list[pyhdl_statement.Statement] = []
