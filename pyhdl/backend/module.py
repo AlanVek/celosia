@@ -563,6 +563,8 @@ class Module:
                             rhs.operands[i] = self._fix_rhs_size(operand, _allow_upsize=True, _force_sign=signed)
 
                         signed = any(op.shape().signed for op in rhs.operands)
+
+                        # TODO: Find a way to avoid using size here to remove unnecessary extra bits
                         max_size = max(size, max(len(op) for op in rhs.operands))
                         rhs.operands = [
                             self._fix_rhs_size(op, max_size, _force_sign=signed) for op in operands
