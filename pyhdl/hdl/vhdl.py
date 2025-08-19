@@ -436,7 +436,7 @@ end rtl;
         #     ''
         # ))
 
-    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], size : int = None, allow_signed: bool = True, allow_bool : bool = False, as_int : bool = False):
+    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], size : int = None, allow_signed: bool = True, allow_bool : bool = False, as_int : bool = False, operation=False):
         if isinstance(rhs, pyhdl_signal.MemoryPort):
             size = len(rhs.signal)
 
@@ -457,7 +457,8 @@ end rtl;
                 else:
                     rhs = f'to_unsigned{rhs}'
 
-                rhs = f'std_logic_vector({rhs})'
+                if not operation:
+                    rhs = f'std_logic_vector({rhs})'
 
         elif isinstance(rhs, int):
             pass
@@ -466,7 +467,7 @@ end rtl;
             rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
-            signed = allow_signed and rhs.shape().signed and len(rhs) > 1
+            signed = allow_signed and rhs.shape().signed
             width = len(rhs)
             rhs = rhs.name
 
@@ -479,6 +480,12 @@ end rtl;
 
             elif width > size:
                 rhs = f'{rhs}({size-1} downto 0)'
+
+            if operation:
+                if signed:
+                    rhs = f'signed({rhs})'
+                else:
+                    rhs = f'unsigned({rhs})'
 
         elif isinstance(rhs, ast.Cat):
             rhs = f"{' & '.join(self._parse_rhs(part) for part in rhs.parts[::-1])}"
@@ -494,7 +501,10 @@ end rtl;
 
         elif isinstance(rhs, ast.Operator):
             allow_signed = rhs.operator != 'u'
-            parsed = list(map(lambda x: self._parse_rhs(x, allow_signed=allow_signed), rhs.operands))
+            operation = len(rhs.operands) > 1 and rhs.operator in (
+                '+', '-', '*', '//', '%', '<', '<=', '==', '!=', '>', '>=',
+            )
+            parsed = list(map(lambda x: self._parse_rhs(x, allow_signed=allow_signed, operation=operation), rhs.operands))
             if len(rhs.operands) == 1:
                 p0 = parsed[0]
                 if rhs.operator == '+':
@@ -521,7 +531,9 @@ end rtl;
                     if rhs.operands[0].shape().signed:
                         rhs = p0
                     else:
-                        rhs = f'std_logic_vector(signed({p0}))'
+                        rhs = f'signed({p0})'
+                        if not operation:
+                            rhs = f'std_logic_vector({rhs})'
                 else:
                     raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
@@ -529,6 +541,10 @@ end rtl;
                 p0, p1 = parsed
 
                 resize = lambda x: x
+
+                if operation:
+                    resize = lambda x: f'std_logic_vector({x})'
+
                 if rhs.operator in ('+', '-', '*', '//', '%'):
                     if any(len(operand) <= size for operand in rhs.operands):
                         resize = lambda x: f'std_logic_vector(resize({x}, {size}))'
