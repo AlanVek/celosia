@@ -167,7 +167,12 @@ end rtl;
         return self._generate_signal_from_string(mapping.signal.name, len(mapping.signal), dir=dir, type=type)
 
     def _generate_port(self, port: pyhdl_signal.Port):
-        return indent(self._generate_signal(port, port.direction), self.tabs())
+        ret = self._generate_signal(port, port.direction)
+
+        if port.direction == 'o':
+            ret += f' := {self._generate_reset(port.signal.reset, len(port.signal))}'
+
+        return indent(ret, self.tabs())
 
     def _generate_port_from_string(self, name: str, width: int, dir: str, type=None):
         return self._generate_signal_from_string(name, width, dir=dir, type=type)
@@ -322,14 +327,17 @@ end rtl;
                 test = ''
             else:
                 idx = lambda x: x
-                if not isinstance(case.test, (ast.Operator, ast.Const, ast.Slice)):
+                if isinstance(case.test, ast.Signal):
                     idx = lambda x: f'{x}(0)'
 
                 test = str(self._parse_rhs(case.test, allow_bool=True))
 
                 # FIX: If '0'/'1' not allowed apparently
-                if test in ('"0"', '"1"'):
-                    test = f"std_logic'('{test[1]}') = std_logic'('1')"
+                for possible_value in [0, 1]:
+                    if test == self._parse_rhs(ast.Const(possible_value, 1)[0], allow_bool=True):
+                        test = f"std_logic'('{possible_value}') = std_logic'('1')"
+                        idx = lambda x: x
+                        break
                 test = f' {idx(test)}'
 
             ret += f'{opening}{test}{begin}'
@@ -446,19 +454,27 @@ end rtl;
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value
+            width = rhs.width
 
-            if as_int:
-                rhs = value
+            if value < 0:
+                value += 2**width
+
+            if width % 4:
+                value = format(value, f'0{width}b')
+                value = f'"{value}"'
             else:
-                width = rhs.width
-                rhs = f'({value}, {width})'
-                if signed:
-                    rhs = f'to_signed{rhs}'
-                else:
-                    rhs = f'to_unsigned{rhs}'
+                value = format(value, f'0{width//4}x')
+                value = f'x"{value}"'
 
-                if not operation:
-                    rhs = f'std_logic_vector({rhs})'
+            if signed:
+                fn = 'signed'
+            else:
+                fn = 'unsigned'
+
+            rhs = f"{fn}(std_logic_vector'({value}))"
+
+            if not operation:
+                rhs = f'std_logic_vector({rhs})'
 
         elif isinstance(rhs, int):
             pass
@@ -558,9 +574,7 @@ end rtl;
                     if not allow_bool:
                         rhs = f'"1" when {rhs} else "0"'
                 elif rhs.operator in ('<<', '>>'):
-                    offset = self._parse_rhs(rhs.operands[1], as_int=True)
-                    if not isinstance(offset, int):
-                        offset = f'to_integer({offset})'
+                    offset = f'to_integer({self._parse_rhs(rhs.operands[1])})'
 
                     if rhs.operator == '>>':
                         fn = 'shift_right'
@@ -597,7 +611,7 @@ end rtl;
             rhs = f'{self._parse_rhs(rhs.value)} >> {self._parse_rhs(rhs.offset)}'
         elif isinstance(rhs, pyhdl_signal.MemoryPort):
             index = f'to_integer({self._parse_rhs(rhs.index)}'
-            rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}({index}))'
+            rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}({index})))'
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs))
 
