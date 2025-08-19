@@ -27,7 +27,7 @@ class Module:
 
         self.hdl = hdl
 
-        self.submodules: list[Module] = []
+        self.submodules: list[tuple[Module, dict]] = []
         self.signals: dict[ast.Signal, pyhdl_signal.Signal] = ast.SignalDict()
         self.ports : list[pyhdl_signal.Port] = []
         self._remapped = ast.SignalDict()
@@ -660,14 +660,14 @@ class Module:
     def _prepare_statements(self):
         self._execute_statements(self.fragment.statements)
 
-    def _submodule_create(self, name: str, fragment: ir.Fragment, cls: type = None, **kwargs):
+    def _submodule_create(self, name: str, fragment: ir.Fragment, cls: type = None, **kwargs) -> "Module":
         if cls is None:
             cls = Module
 
         return cls(name, fragment, hdl=self.hdl, invalid_names=self.invalid_names, top=False, **kwargs)
 
     def _process_memory(self, subfragment: ir.Fragment, name: str):
-        m: Module = self._submodule_create(name, subfragment, MemoryModule)
+        m = self._submodule_create(name, subfragment, MemoryModule)
         m.prepare()
 
         for signal, mapping in m.signals.items():
@@ -687,14 +687,14 @@ class Module:
                 for statement in mapping.statements:
                     self.signals[signal].add_statement(statement)
 
-    def _process_submodule_instance(self, subfragment: ir.Fragment, name: str):
+    def _process_submodule_instance(self, subfragment: ir.Fragment, name: str) -> tuple["Module", dict]:
         ports : dict[str, ast.Value] = {}
 
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(subfragment, name)
             submodule = None
         else:
-            submodule: Module = self._submodule_create(name, subfragment, InstanceModule)
+            submodule = self._submodule_create(name, subfragment, InstanceModule)
             submodule.prepare()
             for port_name, (port_value, kind) in subfragment.named_ports.items():
                 local_signal = None
@@ -780,7 +780,7 @@ class MemoryModule(InstanceModule):
             return signal.parts
 
         @classmethod
-        def from_fragment(cls, fragment: ir.Instance, prefix: str, domain_resolver):
+        def from_fragment(cls, fragment: ir.Instance, prefix: str, domain_resolver) -> list["MemoryModule.Port"]:
             ports = fragment.named_ports
             parameters = fragment.parameters
 
@@ -807,12 +807,12 @@ class MemoryModule(InstanceModule):
 
     class ReadPort(Port):
         @classmethod
-        def from_fragment(cls, fragment, domain_resolver):
+        def from_fragment(cls, fragment: ir.Instance, domain_resolver) -> list["MemoryModule.ReadPort"]:
             return super().from_fragment(fragment, 'RD', domain_resolver)
 
     class WritePort(Port):
         @classmethod
-        def from_fragment(cls, fragment, domain_resolver):
+        def from_fragment(cls, fragment: ir.Instance, domain_resolver) -> list["MemoryModule.WritePort"]:
             return super().from_fragment(fragment, 'WR', domain_resolver)
 
     def __init__(self, name: str, fragment: ir.Instance, hdl: "HDL" = None, invalid_names: set = None, top: bool = True):
