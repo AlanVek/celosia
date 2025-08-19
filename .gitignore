@@ -175,3 +175,6 @@ cython_debug/
 
 *.fst
 *.vcd
+*.v
+*.vhd
+*.vhdl
