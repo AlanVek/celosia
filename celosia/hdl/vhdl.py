@@ -596,7 +596,7 @@ end rtl;
                         resize = lambda x: f'std_logic_vector(resize({x}, {size}))'
 
                 if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
-                    operator = rhs.operator[0].replace("|", "or").replace('&', 'and').replace('^', 'xor')
+                    operator = rhs.operator[0].replace("|", "or").replace('&', 'and').replace('^', 'xor').replace('%', 'rem')
                     rhs = resize(f'{p0} {operator} {p1}')
                 elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
                     operator = rhs.operator.replace('==', '=').replace('!=', '/=')
