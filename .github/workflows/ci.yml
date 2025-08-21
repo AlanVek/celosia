@@ -1,0 +1,45 @@
+name: Run example tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    environment:
+      artifacts: artifacts
+      test_file: examples/run.py
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y python3-venv
+
+      - name: Set up Python virtual environment
+        run: |
+          python3 -m venv venv
+          venv/bin/python3 -m pip install --upgrade pip
+
+      - name: Install Python dependencies
+        run: |
+          venv/bin/python3 -m pip install .
+
+      - name: Run tests
+        run: |
+          rm -rf ${{env.artifacts}} || true
+          venv/bin/python3 ${{env.test_file}} -o ${{env.artifacts}} --all
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: ${{env.artifacts}}
+          retention-days: 7

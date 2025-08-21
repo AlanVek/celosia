@@ -22,22 +22,10 @@ class Adder(Elaboratable):
 
         return m
 
-def main():
-    from celosia import verilog, vhdl
-    import os
-
-    path = os.path.dirname(__file__)
-
+def test():
     adder = Adder(4, domain = 'sync')
     ports = [
         adder.a, adder.b, adder.o,
     ]
 
-    with open(os.path.join(path, 'adder.v'), 'w') as f:
-        f.write(verilog.convert(adder, ports = ports))
-
-    with open(os.path.join(path, 'adder.vhd'), 'w') as f:
-        f.write(vhdl.convert(adder, ports = ports))
-
-if __name__ == '__main__':
-    main()
+    return adder, ports
