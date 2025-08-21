@@ -3,6 +3,7 @@ import importlib.util
 from celosia import verilog, vhdl
 from pathlib import Path
 import argparse
+import logging
 
 def main():
     parser = argparse.ArgumentParser()
@@ -37,14 +38,11 @@ def main():
         (vhdl.convert, '.vhd', args.vhdl),
     ]
 
-    namespace = {}
     for file in input_files:
 
         # Exclude self
         if file.resolve() == Path(__file__).resolve():
             continue
-
-        namespace.clear()
 
         try:
             module_name = file.stem
@@ -54,7 +52,7 @@ def main():
 
             test = getattr(module, 'test', None)
             if not callable(test):
-                print(f"Skipping {file}, test not defined")
+                logging.warning(f"Skipping {file}, test not defined")
                 continue
 
             output_template = output_path / file.relative_to(test_path)
@@ -66,7 +64,7 @@ def main():
                     output_template.with_suffix(extension).write_text(function(module, ports=ports))
 
         except BaseException as e:
-            print(f"Skipping {file}, test failed: {e}")
+            logging.warning(f"Skipping {file}, test failed: {e}")
 
 if __name__ == '__main__':
     main()
