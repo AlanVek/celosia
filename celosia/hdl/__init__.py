@@ -46,12 +46,11 @@ class HDL:
 
         if curr_num:
             idx = int(curr_num) + 1
-            if self._change_case(name) in invalid:
-                name = name[:curr_idx+1]
+            _name = name[:curr_idx+1]
         else:
             idx = 0
+            _name = name
 
-        _name = name
         while self._change_case(name) in invalid:
             name = f'{_name}{idx}'
             idx += 1
