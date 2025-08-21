@@ -6,7 +6,8 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--path', required=False, default=None, help='Base path to find tests (defaults to .)')
+    parser.add_argument('-i', '--input', required=False, default=None, help='Base path to find tests. Can be a file or a directory (defaults to .)')
+    parser.add_argument('-r', '--recursive', required=False, action='store_true', default=False, help='If input is a directory, look for test files recursively')
     parser.add_argument('-o', '--output', required=True, default=None, help='Output directory to store results')
     parser.add_argument('--verilog', required=False, action='store_true', default=False, help='Convert to verilog')
     parser.add_argument('--vhdl', required=False, action='store_true', default=False, help='Convert to VHDL')
@@ -14,17 +15,22 @@ def main():
 
     args = parser.parse_args()
 
-    test_path = args.path
+    test_path = args.input
     if test_path is None:
         test_path = Path(__file__).parent
-
     test_path = Path(test_path)
+
+    if test_path.is_dir():
+        input_files = (test_path.rglob if args.recursive else test_path.glob)('*.py')
+    elif test_path.is_file():
+        input_files = [test_path]
+        test_path = test_path.parent
+    else:
+        raise ValueError(f"Invalid input path: {test_path}")
+
     output_path = Path(args.output)
 
     os.makedirs(str(output_path), exist_ok=True)
-
-    if not test_path.is_dir():
-        raise RuntimeError(f"Unknown test path: {test_path}")
 
     hdl_mappings = [
         (verilog.convert, '.v', args.verilog),
@@ -32,7 +38,7 @@ def main():
     ]
 
     namespace = {}
-    for file in test_path.rglob('*.py'):
+    for file in input_files:
 
         # Exclude self
         if file.resolve() == Path(__file__).resolve():
