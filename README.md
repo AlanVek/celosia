@@ -16,7 +16,7 @@ You can find example designs and usage in the [`examples/`](examples/) directory
 Here is a minimal example of how to use celosia to convert an Amaranth design:
 
 ```python
-from celosia.hdl import verilog, vhdl
+from celosia import verilog, vhdl
 from amaranth import Module, Signal
 
 def main():
