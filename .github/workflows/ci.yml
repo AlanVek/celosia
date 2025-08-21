@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    environment:
+    env:
       artifacts: artifacts
       test_file: examples/run.py
 
