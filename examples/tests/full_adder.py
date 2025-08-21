@@ -41,14 +41,14 @@ class FullAdder(Elaboratable):
 
         adders = [SingleAdder() for _ in range(self.width)]
 
-        ci  = co    = Const(0, 1)
-        o           = []
+        co  = Const(0, 1)
+        o   = []
 
         for i, adder in enumerate(adders):
             m.submodules[f'adder{i}'] = adder
 
             m.d.comb += [
-                adder.ci    .eq(ci),
+                adder.ci    .eq(co),
                 adder.a     .eq(self.a[i]),
                 adder.b     .eq(self.b[i]),
             ]
