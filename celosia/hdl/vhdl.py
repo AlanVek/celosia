@@ -199,10 +199,16 @@ end rtl;
         return self._generate_signal_from_string(name, width, dir=dir, type=type)
 
     def _generate_reset(self, values, width) -> str:
+
+        depth = None
         if isinstance(values, (int, ast.Const)):
             values = [values]
+            depth = 0
         elif not isinstance(values, (list, tuple, set)):
             raise RuntimeError(f"Unknown reset value: {values}")
+
+        if depth is None:
+            depth = len(values)
 
         resets = []
 
@@ -221,7 +227,7 @@ end rtl;
 
             resets.append(reset)
 
-        if len(resets) == 1:
+        if depth == 0:
             return resets[0]
         elif all(r == reset[0] for r in resets):
             return f"(others => {resets[0]})"
