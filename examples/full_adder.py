@@ -61,7 +61,7 @@ class FullAdder(Elaboratable):
         return m
 
 def main():
-    from pyhdl import verilog, vhdl
+    from celosia import verilog, vhdl
     import os
 
     path = os.path.dirname(__file__)

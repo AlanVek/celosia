@@ -1,11 +1,11 @@
-import pyhdl.backend.statement as pyhdl_statement
+import celosia.backend.statement as celosia_statement
 from amaranth.hdl import ast, ir
 
 class Signal:
     def __init__(self, signal: ast.Signal, domain: ir.ClockDomain = None):
         self.signal = signal
         self.domain = domain
-        self.statements: list[pyhdl_statement.Statement] = []
+        self.statements: list[celosia_statement.Statement] = []
 
         self._no_reset_statement = False
 
@@ -16,7 +16,7 @@ class Signal:
     def assigned_bits(self):
         assigned_bits = [False] * len(self.signal)
         for statement in self.statements:
-            if isinstance(statement, pyhdl_statement.Assign):
+            if isinstance(statement, celosia_statement.Assign):
                 start_idx = statement._start_idx
                 stop_idx = statement._stop_idx
 
@@ -41,7 +41,7 @@ class Signal:
         if all(assigned_bits):
             return None
 
-        return pyhdl_statement.Assign(ast.Const(self.signal.reset, len(self.signal)))
+        return celosia_statement.Assign(ast.Const(self.signal.reset, len(self.signal)))
 
     def add_statement(self, statement):
         if not isinstance(statement, list):
@@ -54,7 +54,7 @@ class Signal:
 
         if self.domain is None:
             if self.statements:
-                if len(self.statements) <= 1 and all(isinstance(st, pyhdl_statement.Assign) for st in self.statements):
+                if len(self.statements) <= 1 and all(isinstance(st, celosia_statement.Assign) for st in self.statements):
                     if all(self.assigned_bits):
                         return True
             else:
@@ -77,7 +77,7 @@ class RemappedSignal(Signal):
         self.sync_signal = sync_signal
 
     @property
-    def reset_statement(self) -> pyhdl_statement.Assign:
+    def reset_statement(self) -> celosia_statement.Assign:
         reset = super().reset_statement
 
         if reset is not None:

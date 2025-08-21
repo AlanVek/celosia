@@ -1,7 +1,7 @@
 from textwrap import indent
-import pyhdl.backend.signal as pyhdl_signal
-import pyhdl.backend.module as pyhdl_module
-import pyhdl.backend.statement as pyhdl_statement
+import celosia.backend.signal as celosia_signal
+import celosia.backend.module as celosia_module
+import celosia.backend.statement as celosia_statement
 from amaranth.hdl import ast, ir
 from typing import Union
 
@@ -21,7 +21,7 @@ class HDL:
         self.signal_features: dict[str, list] = {}
         self.submodule_features: dict[str, list] = {}
 
-        self.module: pyhdl_module.Module = None
+        self.module: celosia_module.Module = None
         self.invalid_names: set[str] = set()
 
     def sanitize(self, name: str) -> str:
@@ -59,17 +59,17 @@ class HDL:
 
         return name
 
-    def _sanitize_name(self, entry: Union[pyhdl_module.Module, ast.Signal], extra: set[str] = None):
+    def _sanitize_name(self, entry: Union[celosia_module.Module, ast.Signal], extra: set[str] = None):
         entry.name = self._sanitize_something(self.sanitize(entry.name), extra=extra)
 
-    def _sanitize_type(self, entry: pyhdl_module.Module, extra: set[str] = None) -> None:
+    def _sanitize_type(self, entry: celosia_module.Module, extra: set[str] = None) -> None:
         entry.type = self._sanitize_something(self.sanitize(entry.type), extra=extra)
 
     @classmethod
     def _add_invalid(cls, invalid: set[str], entry: str):
         invalid.add(cls._change_case(entry))
 
-    def _cleanup_names(self, module: pyhdl_module.Module):
+    def _cleanup_names(self, module: celosia_module.Module):
         if module.top:
             self._sanitize_name(module)
             self._add_invalid(self.invalid_names, module.name)
@@ -86,12 +86,12 @@ class HDL:
             self._sanitize_name(submodule, extra=local)
             self._add_invalid(local, submodule.name)
 
-            if not isinstance(submodule, pyhdl_module.InstanceModule):
+            if not isinstance(submodule, celosia_module.InstanceModule):
                 self._sanitize_type(submodule, extra=local)
             self._add_invalid(self.invalid_names, submodule.type)
 
         for signal, mapping in module.signals.items():
-            if not isinstance(mapping, pyhdl_signal.Port):
+            if not isinstance(mapping, celosia_signal.Port):
                 self._sanitize_name(signal, extra=local)
             self._add_invalid(local, signal.name)
 
@@ -99,7 +99,7 @@ class HDL:
             self._cleanup_names(submodule)
 
     def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None):
-        m = pyhdl_module.Module(name, fragment)
+        m = celosia_module.Module(name, fragment)
         m.prepare(ports, platform)
 
         self.invalid_names.clear()
@@ -113,7 +113,7 @@ class HDL:
         self.signal_features.clear()
         self.submodule_features.clear()
 
-    def _convert_module(self, module: pyhdl_module.Module) -> str:
+    def _convert_module(self, module: celosia_module.Module) -> str:
         self.module = module
 
         self.reset()
@@ -143,7 +143,7 @@ class HDL:
             res.append(converted)
 
         for submodule, _ in self.module.submodules:
-            if isinstance(submodule, pyhdl_module.InstanceModule):
+            if isinstance(submodule, celosia_module.InstanceModule):
                 continue
             res.append(self._convert_module(submodule))
 
@@ -152,19 +152,19 @@ class HDL:
 
         return '\n'.join(res)
 
-    def _generate_port(self, mapping: pyhdl_signal.Signal) -> str:
+    def _generate_port(self, mapping: celosia_signal.Signal) -> str:
         return ''
 
-    def _generate_initial(self, mapping: pyhdl_signal.Signal) -> str:
+    def _generate_initial(self, mapping: celosia_signal.Signal) -> str:
         return ''
 
-    def _generate_assignment(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement) -> str:
+    def _generate_assignment(self, mapping: celosia_signal.Signal, statement: celosia_statement.Statement) -> str:
         return ''
 
-    def _generate_block(self, mapping: pyhdl_signal.Signal)  -> str:
+    def _generate_block(self, mapping: celosia_signal.Signal)  -> str:
         return ''
 
-    def _generate_signal_features(self, mapping: pyhdl_signal.Signal):
+    def _generate_signal_features(self, mapping: celosia_signal.Signal):
         return
 
     def _generate_signals(self) -> tuple[str, str, str, str]:
@@ -181,7 +181,7 @@ class HDL:
             if new_initial:
                 initials.append(new_initial)
 
-            if isinstance(mapping, pyhdl_signal.Port):
+            if isinstance(mapping, celosia_signal.Port):
                 ports.append(f'{self._generate_port(mapping)}')
 
                 if mapping.direction == 'i':
@@ -209,10 +209,10 @@ class HDL:
 
         return ports, initials, assignments, blocks
 
-    def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict) -> str:
+    def _generate_submodule(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict) -> str:
         return ''
 
-    def _generate_submodule_features(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
+    def _generate_submodule_features(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict):
         return
 
     def _generate_submodules(self) -> str:
@@ -220,7 +220,7 @@ class HDL:
 
         for submodule, ports in self.module.submodules:
             params = {}
-            if not isinstance(submodule, pyhdl_module.InstanceModule):
+            if not isinstance(submodule, celosia_module.InstanceModule):
                 if ports is not None:
                     raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {self.module.name}")
 
@@ -246,10 +246,10 @@ class HDL:
 
         return '\n'.join(submodules)
 
-    def _generate_switch(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement) -> str:
+    def _generate_switch(self, mapping: celosia_signal.Signal, statement: celosia_statement.Statement) -> str:
         return ''
 
-    def _generate_statements(self, mapping: pyhdl_signal.Signal, statements: list[pyhdl_statement.Statement]) -> str:
+    def _generate_statements(self, mapping: celosia_signal.Signal, statements: list[celosia_statement.Statement]) -> str:
         res = []
         for statement in statements:
             new = self._generate_statement(mapping, statement)
@@ -257,11 +257,11 @@ class HDL:
                 res.append(new)
         return '\n'.join(res)
 
-    def _generate_statement(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement):
-        if isinstance(statement, pyhdl_statement.Assign):
+    def _generate_statement(self, mapping: celosia_signal.Signal, statement: celosia_statement.Statement):
+        if isinstance(statement, celosia_statement.Assign):
             res = self._generate_assignment(mapping, statement)
 
-        elif isinstance(statement, pyhdl_statement.Switch):
+        elif isinstance(statement, celosia_statement.Switch):
             res = self._generate_switch(mapping, statement)
 
         else:

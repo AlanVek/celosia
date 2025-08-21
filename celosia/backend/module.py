@@ -1,6 +1,6 @@
 from amaranth.hdl import ast, ir
-import pyhdl.backend.signal as pyhdl_signal
-import pyhdl.backend.statement as pyhdl_statement
+import celosia.backend.signal as celosia_signal
+import celosia.backend.statement as celosia_statement
 from typing import Union
 
 class Module:
@@ -19,8 +19,8 @@ class Module:
             self.fragment = fragment
 
         self.submodules: list[tuple[Module, dict]] = []
-        self.signals: dict[ast.Signal, pyhdl_signal.Signal] = ast.SignalDict()
-        self.ports: list[pyhdl_signal.Port] = []
+        self.signals: dict[ast.Signal, celosia_signal.Signal] = ast.SignalDict()
+        self.ports: list[celosia_signal.Port] = []
         self._remapped = ast.SignalDict()
 
     @property
@@ -60,7 +60,7 @@ class Module:
             raise RuntimeError(f"Missing signal {signal.name} from module {self.name}")
         return s
 
-    def _new_signal(self, shape: Union[int, ast.Shape] = 1, prefix: str = None, mapping: type = pyhdl_signal.Signal, **kwargs) -> ast.Value:
+    def _new_signal(self, shape: Union[int, ast.Shape] = 1, prefix: str = None, mapping: type = celosia_signal.Signal, **kwargs) -> ast.Value:
         name = prefix or 'tmp'
         new = ast.Signal(shape, name=name)
         self.signals[new] = mapping(new, **kwargs)
@@ -72,10 +72,10 @@ class Module:
         return ast.Const(0, 0)
         return self._new_signal(0, prefix = 'empty')
 
-    def _add_new_statement(self, left: ast.Value, statement: pyhdl_statement.Statement) -> None:
+    def _add_new_statement(self, left: ast.Value, statement: celosia_statement.Statement) -> None:
         ########################
         if left not in self.signals:
-            self.signals[left] = pyhdl_signal.Signal(left)
+            self.signals[left] = celosia_signal.Signal(left)
         ########################
         remap = self._remapped.get(left, None)
         if remap is not None:
@@ -83,7 +83,7 @@ class Module:
         self._get_signal(left).add_statement(statement)
 
     def _add_new_assign(self, left: ast.Signal, right: ast.Value, start_idx: int = None, stop_idx: int = None) -> None:
-        self._add_new_statement(left, pyhdl_statement.Assign(right, start_idx, stop_idx))
+        self._add_new_statement(left, celosia_statement.Assign(right, start_idx, stop_idx))
 
     def prepare(self, ports: list = None, platform=None) -> None:
         if self.top:
@@ -97,7 +97,7 @@ class Module:
 
         # TODO: Possibly create intermediate signals so that ports are always wire
         for port, direction in self.fragment.ports.items():
-            self.signals[port] = pyhdl_signal.Port(port, direction=direction)
+            self.signals[port] = celosia_signal.Port(port, direction=direction)
             self.ports.append(self.signals[port])
 
         for domain, signal in self.fragment.iter_drivers():
@@ -106,23 +106,23 @@ class Module:
 
             entry = self.signals.get(signal, None)
             if entry is None:
-                entry = self.signals[signal] = pyhdl_signal.Signal(signal)
+                entry = self.signals[signal] = celosia_signal.Signal(signal)
 
             if self.allow_remapping and domain is not None:
                 remap = self._remapped[signal] = self._new_signal(
                     signal.shape(),
                     prefix = f'{signal.name}_next',
-                    mapping = pyhdl_signal.RemappedSignal,
+                    mapping = celosia_signal.RemappedSignal,
                     sync_signal = signal,
                 )
 
                 # For some reason, cocotb needs rst duplication in comb and sync parts
                 if domain.rst is None or not domain.async_reset:
-                    entry.add_statement(pyhdl_statement.Assign(remap))
+                    entry.add_statement(celosia_statement.Assign(remap))
                 else:
-                    entry.add_statement(pyhdl_statement.Switch(domain.rst, {
-                        '0': [pyhdl_statement.Assign(remap)],
-                        '1': [pyhdl_statement.Assign(ast.Const(signal.reset, len(signal)))]
+                    entry.add_statement(celosia_statement.Switch(domain.rst, {
+                        '0': [celosia_statement.Assign(remap)],
+                        '1': [celosia_statement.Assign(ast.Const(signal.reset, len(signal)))]
                     }))
 
             entry.domain = domain
@@ -157,7 +157,7 @@ class Module:
         if isinstance(lhs, (ast.Const, ast.Operator)):
             raise RuntimeError("Invalid LHS:", lhs)
         elif isinstance(lhs, ast.Signal):
-            res.append((lhs, pyhdl_statement.Assign(rhs, start_idx, stop_idx)))
+            res.append((lhs, celosia_statement.Assign(rhs, start_idx, stop_idx)))
         elif isinstance(lhs, ast.Cat):
             loffset = roffset = 0
             parts = [part for part in lhs.parts if len(part)]
@@ -248,7 +248,7 @@ class Module:
         elif isinstance(rhs, ast.Signal):
             # Fix: Can happen with submodule ports
             if rhs not in self.signals:
-                self.signals[rhs] = pyhdl_signal.Signal(rhs)
+                self.signals[rhs] = celosia_signal.Signal(rhs)
 
         elif isinstance(rhs, ast.Cat):
             parts = [part for part in rhs.parts if len(part)]
@@ -322,13 +322,13 @@ class Module:
 
                 index = self._process_rhs(rhs.index, **kwargs)
                 cases = {
-                    i: [pyhdl_statement.Assign(elem)] for i, elem in enumerate(rhs.elems)
+                    i: [celosia_statement.Assign(elem)] for i, elem in enumerate(rhs.elems)
                 }
 
                 # if 2**len(index) > len(rhs.elems):
                 #     cases[None] = 0 # Default
 
-                self._add_new_statement(new_rhs, pyhdl_statement.Switch(index, cases))
+                self._add_new_statement(new_rhs, celosia_statement.Switch(index, cases))
                 rhs = new_rhs
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
@@ -506,7 +506,7 @@ class Module:
 
         return self._process_rhs(rhs)
 
-    def _open_switch(self, test: ast.Value, cases: dict) -> list[tuple[ast.Signal, pyhdl_statement.Switch]]:
+    def _open_switch(self, test: ast.Value, cases: dict) -> list[tuple[ast.Signal, celosia_statement.Switch]]:
         res = []
         per_signal = ast.SignalDict()
 
@@ -526,7 +526,7 @@ class Module:
 
         res = []
         for signal, cases in per_signal.items():
-            switch = pyhdl_statement.Switch(test, cases)
+            switch = celosia_statement.Switch(test, cases)
 
             if not switch.cases:
                 continue
@@ -586,14 +586,14 @@ class Module:
 
         for signal, mapping in m.signals.items():
 
-            if isinstance(mapping, (pyhdl_signal.Memory, pyhdl_signal.MemoryPort)):
+            if isinstance(mapping, (celosia_signal.Memory, celosia_signal.MemoryPort)):
                 assert signal not in self.signals, "Internal error with Memory signals"
                 self.signals[signal] = mapping
 
             else:
                 curr_mapping = self.signals.get(signal, None)
                 if curr_mapping is None:
-                    self.signals[signal] = curr_mapping = pyhdl_signal.Signal(mapping.signal, mapping.domain)
+                    self.signals[signal] = curr_mapping = celosia_signal.Signal(mapping.signal, mapping.domain)
 
                 if curr_mapping.domain is None:
                     curr_mapping.domain = mapping.domain    # Allow for domain changes
@@ -633,7 +633,7 @@ class Module:
                         else:
                             raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
-                ports[port_name] = pyhdl_signal.Port(ports[port_name], kind)
+                ports[port_name] = celosia_signal.Port(ports[port_name], kind)
 
                 if local_signal is not None:
                     local_signal.disable_reset_statement()
@@ -654,7 +654,7 @@ class Module:
                 for port in submodule.ports:
                     local_signal = self.signals.get(port.signal, None)
                     if local_signal is None:
-                        local_signal = self.signals[port.signal] = pyhdl_signal.Signal(port.signal)
+                        local_signal = self.signals[port.signal] = celosia_signal.Signal(port.signal)
 
                     if port.direction in ['o', 'io']:
                         local_signal.disable_reset_statement()
@@ -732,7 +732,7 @@ class MemoryModule(InstanceModule):
     def __init__(self, name: str, fragment: ir.Instance, top: bool = True):
         super().__init__(name, fragment, top=top)
 
-        self._mem: pyhdl_signal.Memory = None
+        self._mem: celosia_signal.Memory = None
         self._arr = ast.SignalSet()
 
         self._r_ports: list[MemoryModule.ReadPort] = self.ReadPort.from_fragment(
@@ -769,14 +769,14 @@ class MemoryModule(InstanceModule):
         self._mem = self.signals[self._new_signal(
             shape   = self._width,
             prefix  = self.name,
-            mapping = pyhdl_signal.Memory,
+            mapping = celosia_signal.Memory,
             init    = self._init,
         )]
 
 
         for rport in self._r_ports:
             self.signals[rport.data].domain = rport.domain
-            rport.proxy = pyhdl_signal.MemoryPort(self._mem.signal, memory = self._mem, index = rport.index)
+            rport.proxy = celosia_signal.MemoryPort(self._mem.signal, memory = self._mem, index = rport.index)
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
                 self.signals.pop(rport.enable, None)
@@ -785,7 +785,7 @@ class MemoryModule(InstanceModule):
             wport.proxy = self._new_signal(
                 shape = self._width,
                 prefix = f'{self.name}_internal',    # Doesn't matter, signal won't really exist
-                mapping = pyhdl_signal.MemoryPort,
+                mapping = celosia_signal.MemoryPort,
                 domain = wport.domain,
                 memory = self._mem,
                 index = wport.index,
@@ -825,7 +825,7 @@ class MemoryModule(InstanceModule):
 
             for wport in self._w_ports:
                 if lhs.index is wport.index:
-                    return [(wport.proxy, pyhdl_statement.Assign(rhs))]
+                    return [(wport.proxy, celosia_statement.Assign(rhs))]
 
             raise RuntimeError(f"Port write index not found for memory {self.name}")
 

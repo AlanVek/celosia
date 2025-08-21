@@ -1,11 +1,11 @@
  
-# pyhdl
+# celosia
 
-**pyhdl** is a Python module that provides a way to convert Amaranth HDL designs into usable HDL code. It aims to offer an alternative workflow for generating hardware description language (HDL) files from Amaranth, supporting both Verilog and VHDL output formats.
+**celosia** is a Python module that provides a way to convert Amaranth HDL designs into usable HDL code. It aims to offer an alternative workflow for generating hardware description language (HDL) files from Amaranth, supporting both Verilog and VHDL output formats.
 
-## What is pyhdl?
+## What is celosia?
 
-pyhdl is an independent project designed to help users of [Amaranth HDL](https://amaranth-lang.org/) convert their designs into Verilog and VHDL. This module is not affiliated with Amaranth or Yosys, and is developed as a separate effort. The goal is to provide a simple, Pythonic interface for HDL code generation.
+celosia is an independent project designed to help users of [Amaranth HDL](https://amaranth-lang.org/) convert their designs into Verilog and VHDL. This module is not affiliated with Amaranth or Yosys, and is developed as a separate effort. The goal is to provide a simple, Pythonic interface for HDL code generation.
 
 **Disclaimer:** This project is a work in progress and is in not way production-ready. It may lack many features and robustness found in established tools. Use at your own risk.
 
@@ -13,10 +13,10 @@ pyhdl is an independent project designed to help users of [Amaranth HDL](https:/
 
 You can find example designs and usage in the [`examples/`](examples/) directory.
 
-Here is a minimal example of how to use pyhdl to convert an Amaranth design:
+Here is a minimal example of how to use celosia to convert an Amaranth design:
 
 ```python
-from pyhdl.hdl import verilog, vhdl
+from celosia.hdl import verilog, vhdl
 from amaranth import Module, Signal
 
 def main():

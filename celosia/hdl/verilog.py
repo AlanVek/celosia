@@ -1,7 +1,7 @@
-from pyhdl.hdl import HDL
-import pyhdl.backend.signal as pyhdl_signal
-import pyhdl.backend.module as pyhdl_module
-import pyhdl.backend.statement as pyhdl_statement
+from celosia.hdl import HDL
+import celosia.backend.signal as celosia_signal
+import celosia.backend.module as celosia_module
+import celosia.backend.statement as celosia_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir
 from typing import Union
@@ -76,7 +76,7 @@ endmodule
 
         return name
 
-    def _generate_signal(self, mapping: pyhdl_signal.Signal, size: bool = True) -> str:
+    def _generate_signal(self, mapping: celosia_signal.Signal, size: bool = True) -> str:
         # TODO: Check what to do with zero-width signals
         # if len(mapping.signal) <= 0:
         #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
@@ -86,7 +86,7 @@ endmodule
         else:
             width = f'[{len(mapping.signal) - 1}:0] '
 
-        if size and isinstance(mapping, pyhdl_signal.Memory):
+        if size and isinstance(mapping, celosia_signal.Memory):
             if len(mapping.init) <= 0:
                 raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
             depth = f' [{len(mapping.init) - 1}:0]'
@@ -95,21 +95,21 @@ endmodule
 
         return f'{width}{mapping.signal.name}{depth}'
 
-    def _generate_port(self, port: pyhdl_signal.Port) ->str:
+    def _generate_port(self, port: celosia_signal.Port) ->str:
         return self._generate_signal(port, size=False)
 
-    def _generate_initial(self, mapping: pyhdl_signal.Signal) -> str:
+    def _generate_initial(self, mapping: celosia_signal.Signal) -> str:
         res = ''
 
-        # pyhdl_signal.Memory ports don't have initials, they're created with the parent signal's pyhdl_signal.Memory
-        if isinstance(mapping, pyhdl_signal.MemoryPort):
+        # celosia_signal.Memory ports don't have initials, they're created with the parent signal's celosia_signal.Memory
+        if isinstance(mapping, celosia_signal.MemoryPort):
             return res
 
-        if isinstance(mapping, pyhdl_signal.Signal):
+        if isinstance(mapping, celosia_signal.Signal):
             reset = None
             dir = ''
 
-            if isinstance(mapping, pyhdl_signal.Memory):
+            if isinstance(mapping, celosia_signal.Memory):
                 type = 'reg'
             else:
                 if mapping.static:
@@ -119,7 +119,7 @@ endmodule
                     if mapping.domain is not None:
                         reset = self._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
 
-                if isinstance(mapping, pyhdl_signal.Port):
+                if isinstance(mapping, celosia_signal.Port):
                     dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
                     dir += ' '
 
@@ -128,7 +128,7 @@ endmodule
                 res += f' = {reset}'
             res += ';'
 
-        if isinstance(mapping, pyhdl_signal.Memory):
+        if isinstance(mapping, celosia_signal.Memory):
             res += '\n'.join((
                 '',
                 'initial begin',
@@ -138,7 +138,7 @@ endmodule
 
         return res
 
-    def _generate_assignment(self, mapping: pyhdl_signal.Signal, statement: list[pyhdl_statement.Statement]) -> str:
+    def _generate_assignment(self, mapping: celosia_signal.Signal, statement: list[celosia_statement.Statement]) -> str:
         symbol = self._get_symbol(mapping)
         if mapping.static:
             prefix = 'assign '
@@ -157,7 +157,7 @@ endmodule
 
         size = len(mapping.signal)
 
-        if isinstance(mapping, pyhdl_signal.MemoryPort):
+        if isinstance(mapping, celosia_signal.MemoryPort):
             repr = f'{repr}[{self._parse_rhs(mapping.index)}]'
 
         if start_idx != 0 or stop_idx != len(mapping.signal):
@@ -169,8 +169,8 @@ endmodule
 
         return f'{prefix}{repr} {symbol} {self._parse_rhs(statement.rhs)};'
 
-    def _generate_block(self, mapping: pyhdl_signal.Signal):
-        statements: list[pyhdl_statement.Statement]= []
+    def _generate_block(self, mapping: celosia_signal.Signal):
+        statements: list[celosia_statement.Statement]= []
 
         if mapping.reset_statement is not None:
             statements.append(mapping.reset_statement)
@@ -197,7 +197,7 @@ endmodule
             '', # Add new line at the end to separate blocks
         ))
 
-    def _generate_if(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Statement, as_if: list[Union[pyhdl_statement.Switch.If, pyhdl_statement.Switch.Else]]):
+    def _generate_if(self, mapping: celosia_signal.Signal, statement: celosia_statement.Statement, as_if: list[Union[celosia_statement.Switch.If, celosia_statement.Switch.Else]]):
         if_opening = 'if'
         else_done = False
 
@@ -206,10 +206,10 @@ endmodule
             if else_done:
                 raise RuntimeError("New case after 'else'")
 
-            if isinstance(case, pyhdl_statement.Switch.If):
+            if isinstance(case, celosia_statement.Switch.If):
                 opening = if_opening
                 if_opening = 'else if'
-            elif isinstance(case, pyhdl_statement.Switch.Else):
+            elif isinstance(case, celosia_statement.Switch.Else):
                 opening = 'else'
                 else_done = True
 
@@ -246,7 +246,7 @@ endmodule
 
         return ret
 
-    def _generate_switch(self, mapping: pyhdl_signal.Signal, statement: pyhdl_statement.Switch):
+    def _generate_switch(self, mapping: celosia_signal.Signal, statement: celosia_statement.Switch):
         if statement.as_if is not None:
             return self._generate_if(mapping, statement, statement.as_if)
 
@@ -283,7 +283,7 @@ endmodule
             'endcase',
         ))
 
-    def _generate_submodule(self, submodule: pyhdl_module.Module, ports: dict[str, pyhdl_signal.Port], parameters: dict):
+    def _generate_submodule(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict):
         res = ''
 
         res += f'{submodule.type}'
@@ -302,7 +302,7 @@ endmodule
 
         return res
 
-    def _parse_rhs(self, rhs: Union[ast.Value, int, str, pyhdl_signal.MemoryPort], allow_signed: bool = True):
+    def _parse_rhs(self, rhs: Union[ast.Value, int, str, celosia_signal.MemoryPort], allow_signed: bool = True):
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value
@@ -380,7 +380,7 @@ endmodule
             if rhs.stride != 1:
                 raise RuntimeError("Only Parts with stride 1 supported at end stage!")
             rhs = f'{self._parse_rhs(rhs.value)} >> {self._parse_rhs(rhs.offset)}'
-        elif isinstance(rhs, pyhdl_signal.MemoryPort):
+        elif isinstance(rhs, celosia_signal.MemoryPort):
             rhs = f'{self._parse_rhs(rhs.signal)}[{self._parse_rhs(rhs.index)}]'
         else:
             raise ValueError("Unknown RHS object detected: {}".format(rhs))

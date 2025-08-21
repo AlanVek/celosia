@@ -1,5 +1,5 @@
 [project]
-name = "pyhdl"
+name = "celosia"
 authors = [
     { name = "Alan Vekselman", email = "alanvek98@gmail.com" },
 ]
