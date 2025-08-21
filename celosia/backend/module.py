@@ -18,7 +18,7 @@ class Module:
         else:
             self.fragment = fragment
 
-        self.submodules: list[tuple[Module, dict]] = []
+        self.submodules: list[Module] = []
         self.signals: dict[ast.Signal, celosia_signal.Signal] = ast.SignalDict()
         self.ports: list[celosia_signal.Port] = []
         self._remapped = ast.SignalDict()
@@ -98,7 +98,10 @@ class Module:
         # TODO: Possibly create intermediate signals so that ports are always wire
         for port, direction in self.fragment.ports.items():
             self.signals[port] = celosia_signal.Port(port, direction=direction)
-            self.ports.append(self.signals[port])
+
+            # FIX: Zero-width ports are skipped early
+            if len(port):
+                self.ports.append(self.signals[port])
 
         for domain, signal in self.fragment.iter_drivers():
             if domain is not None:
@@ -601,19 +604,17 @@ class Module:
                 for statement in mapping.statements:
                     self.signals[signal].add_statement(statement)
 
-    def _process_submodule_instance(self, subfragment: ir.Fragment, name: str) -> tuple["Module", dict]:
-        ports: dict[str, ast.Value] = {}
-
+    def _process_submodule_instance(self, subfragment: ir.Fragment, name: str) -> "Module":
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(subfragment, name)
             submodule = None
         else:
             submodule = self._submodule_create(name, subfragment, InstanceModule)
             submodule.prepare()
-            for port_name, (port_value, kind) in subfragment.named_ports.items():
+            for i, (port_name, (port_value, kind)) in enumerate(subfragment.named_ports.items()):
                 local_signal = None
                 if kind == 'io':
-                    ports[port_name] = port_value   # TODO: Check how to handle!
+                    port = port_value   # TODO: Check how to handle!
                     local_signal = self.signals.get(port_value, None)
                 else:
                     # Special case for ports tied to constants/signals -- We can reduce some logic
@@ -621,10 +622,9 @@ class Module:
                         isinstance(port_value, ast.Const) or
                         (isinstance(port_value, ast.Signal) and port_value in self.signals)
                     ):
-                        ports[port_name] = port_value
+                        port = port_value
                     else:
-                        new_port = self._new_signal(port_value.shape(), prefix=f'port_{port_name}')
-                        ports[port_name] = new_port
+                        port = new_port = self._new_signal(port_value.shape(), prefix=f'port_{port_name}')
                         if kind == 'i':
                             self._execute_statements([new_port.eq(port_value)])
                         elif kind == 'o':
@@ -633,12 +633,12 @@ class Module:
                         else:
                             raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
-                ports[port_name] = celosia_signal.Port(ports[port_name], kind)
+                submodule.ports[i].signal = port
 
                 if local_signal is not None:
                     local_signal.disable_reset_statement()
 
-        return submodule, ports
+        return submodule
 
     def _prepare_submodules(self):
         for subfragment, subname in self.fragment.subfragments:
@@ -646,11 +646,10 @@ class Module:
                 subname = 'unnamed'
 
             if isinstance(subfragment, ir.Instance):
-                submodule, ports = self._process_submodule_instance(subfragment, subname)
+                submodule = self._process_submodule_instance(subfragment, subname)
             else:
                 submodule: Module = self._submodule_create(subname, subfragment, type = f'{self.type}_{subname}')
                 submodule.prepare()
-                ports = None
                 for port in submodule.ports:
                     local_signal = self.signals.get(port.signal, None)
                     if local_signal is None:
@@ -659,18 +658,32 @@ class Module:
                     if port.direction in ['o', 'io']:
                         local_signal.disable_reset_statement()
 
+                    # FIX: Force alt_name early to avoid rename when signals have multiple hierarchy jumps
+                    # and submodules are not seen directly
+                    port.set_alt_name(port.name)
+
             if submodule is not None:
-                self.submodules.append((submodule, ports))
+                self.submodules.append(submodule)
 
 class InstanceModule(Module):
     def __init__(self, name: str, fragment: ir.Fragment, top: bool = True):
         super().__init__(name, fragment, top=top, type=fragment.type)
 
+    def _prepare_signals(self) -> None:
+        super()._prepare_signals()
+
+        self.ports.clear()
+        self.signals.clear()
+        for port_name, (_, kind) in self.fragment.named_ports.items():
+            port = self.signals[self._new_signal(prefix=port_name, mapping=celosia_signal.Port, direction=kind)]
+            port.set_alt_name(port_name)
+            self.ports.append(port)
+
     @property
     def parameters(self):
         return self.fragment.parameters
 
-class MemoryModule(InstanceModule):
+class MemoryModule(Module):
 
     allow_remapping = False
 
@@ -730,7 +743,7 @@ class MemoryModule(InstanceModule):
             return super().from_fragment(fragment, 'WR', domain_resolver)
 
     def __init__(self, name: str, fragment: ir.Instance, top: bool = True):
-        super().__init__(name, fragment, top=top)
+        super().__init__(name, fragment, top=top, type=fragment.type)
 
         self._mem: celosia_signal.Memory = None
         self._arr = ast.SignalSet()

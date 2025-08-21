@@ -125,7 +125,7 @@ end rtl;
 
         # TODO: Check that type doesn't collide with some name
         for i, size in enumerate([len(signal), depth]):
-            next_type = f'type_{signal.name}_{i}'
+            next_type = f'type_{mapping.name}_{i}'
             self._types[mapping].append((len(self._typenames), f'array (0 to {size - 1}) of {new_type}'))
             self._typenames.append(next_type)
             new_type = next_type
@@ -158,7 +158,7 @@ end rtl;
     def _generate_signal_from_string(self, name: str, width: Union[int, ast.Shape], dir: str = None, type=None) -> str:
         # TODO: Check what to do with zero-width signals
         # if len(mapping.signal) <= 0:
-        #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
+        #     raise RuntimeError(f"Zero-width mapping {mapping.name} not allowed")
 
         if dir is None:
             dir = ''
@@ -179,13 +179,13 @@ end rtl;
     def _generate_signal(self, mapping, dir=None):
         if isinstance(mapping, celosia_signal.Memory):
             if len(mapping.init) <= 0:
-                raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
+                raise RuntimeError(f"Zero-depth memory {mapping.name} not allowed")
 
             type = self._get_memory_typename(mapping, -1)
         else:
             type = None
 
-        return self._generate_signal_from_string(mapping.signal.name, len(mapping.signal), dir=dir, type=type)
+        return self._generate_signal_from_string(mapping.name, len(mapping.signal), dir=dir, type=type)
 
     def _generate_port(self, port: celosia_signal.Port):
         ret = self._generate_signal(port, port.direction)
@@ -257,7 +257,7 @@ end rtl;
         if stop_idx is None:
             stop_idx = len(mapping.signal)
 
-        repr = mapping.signal.name
+        repr = mapping.name
 
         size = len(mapping.signal)
         rhs_wrapper = lambda x: x
@@ -322,7 +322,7 @@ end rtl;
             header = footer = ''
 
         # TODO: Check that process name doesn't collide with some name
-        new_process = f'p_{mapping.signal.name}'
+        new_process = f'p_{mapping.name}'
         self._processes.add(new_process)
 
         return '\n'.join((
@@ -416,21 +416,21 @@ end rtl;
             'end case?;',
         ))
 
-    def _generate_submodule(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict):
+    def _generate_submodule(self, submodule: celosia_module.Module):
         res = []
 
-        if parameters:
+        if submodule.parameters:
             # TODO: Check generics types
             res.append('\n'.join((
                 'generic map (',
-                indent(',\n'.join(f'{name} => {value}' for name, value in parameters.items()), self.tabs()),
+                indent(',\n'.join(f'{name} => {value}' for name, value in submodule.parameters.items()), self.tabs()),
                 ')'
             )))
 
         res.append('port map (')
-        if ports:
+        if submodule.ports:
             res.append(
-                indent(',\n'.join(f'{name} => {self._parse_rhs(value.signal)}' for name, value in ports.items()), self.tabs()),
+                indent(',\n'.join(f'{port.name} => {self._parse_rhs(port.signal)}' for port in submodule.ports), self.tabs()),
             )
 
         res.append(');')
@@ -445,24 +445,24 @@ end rtl;
             indent('\n'.join(res), self.tabs()),
         ))
 
-    def _generate_submodule_features(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict):
+    def _generate_submodule_features(self, submodule: celosia_module.Module):
         # TODO: Support blackboxes
 
         res = []
 
-        # if parameters:
+        # if submodule.parameters:
         #     # TODO: Check generics types and parse defaults
         #     res.append('\n'.join((
         #         'generic (',
-        #         indent(';\n'.join(f'{name} : {type} := {default}' for name, (type, default) in parameters.items()), self.tabs()),
+        #         indent(';\n'.join(f'{name} : {type} := {default}' for name, (type, default) in submodule.parameters.items()), self.tabs()),
         #         ');'
         #     )))
 
         # res.append('port (')
-        # if ports:
+        # if submodule.ports:
         #     res.append(
         #         indent(';\n'.join(
-        #             f'{self._generate_port_from_string(name, len(value.signal), value.direction)}' for name, value in ports.items()
+        #             f'{self._generate_port_from_string(port.name, len(port.signal), port.direction)}' for port in submodule.ports
         #         ), self.tabs()),
         #     )
         # res.append(');')
@@ -515,7 +515,7 @@ end rtl;
         elif isinstance(rhs, ast.Signal):
             signed = allow_signed and rhs.shape().signed
             width = len(rhs)
-            rhs = rhs.name
+            rhs = self.module.signals.get(rhs).name
 
             if width < size:
                 if signed:

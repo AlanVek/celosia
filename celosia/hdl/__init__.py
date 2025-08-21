@@ -47,8 +47,7 @@ class HDL:
         if curr_num:
             idx = int(curr_num) + 1
             if self._change_case(name) in invalid:
-                name = f'{name[:curr_idx+1]}{idx}'
-                idx += 1
+                name = name[:curr_idx+1]
         else:
             idx = 0
 
@@ -59,7 +58,7 @@ class HDL:
 
         return name
 
-    def _sanitize_name(self, entry: Union[celosia_module.Module, ast.Signal], extra: set[str] = None):
+    def _sanitize_name(self, entry: Union[celosia_module.Module, celosia_signal.Signal], extra: set[str] = None):
         entry.name = self._sanitize_something(self.sanitize(entry.name), extra=extra)
 
     def _sanitize_type(self, entry: celosia_module.Module, extra: set[str] = None) -> None:
@@ -76,13 +75,23 @@ class HDL:
 
         local: set[str] = set()
 
+        # First, we find out how submodules want to name their ports
+        for submodule in module.submodules:
+            if isinstance(submodule, celosia_module.InstanceModule):
+                continue
+
+            repeated = set()
+            for subport in submodule.ports:
+                subport.set_alt_name(self._sanitize_something(self.sanitize(subport.name), extra=repeated))
+                self._add_invalid(repeated, subport.name)
+
         # For toplevel, ports have priority
         for port in module.ports:
             if module.top:
-                self._sanitize_name(port.signal, extra=local)
-            self._add_invalid(local, port.signal.name)
+                self._sanitize_name(port, extra=local)
+            self._add_invalid(local, port.name)
 
-        for submodule, _ in module.submodules:
+        for submodule in module.submodules:
             self._sanitize_name(submodule, extra=local)
             self._add_invalid(local, submodule.name)
 
@@ -90,12 +99,18 @@ class HDL:
                 self._sanitize_type(submodule, extra=local)
             self._add_invalid(self.invalid_names, submodule.type)
 
-        for signal, mapping in module.signals.items():
+        for mapping in module.signals.values():
             if not isinstance(mapping, celosia_signal.Port):
-                self._sanitize_name(signal, extra=local)
-            self._add_invalid(local, signal.name)
+                # Update remapped name to match original signal. We're assuming that the sync signal has
+                # already been sanitized
+                if isinstance(mapping, celosia_signal.RemappedSignal):
+                    mapping.name = f'{module.signals[mapping.sync_signal].name}_next'
 
-        for submodule, _ in module.submodules:
+                self._sanitize_name(mapping, extra=local)
+
+            self._add_invalid(local, mapping.name)
+
+        for submodule in module.submodules:
             self._cleanup_names(submodule)
 
     def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None):
@@ -142,7 +157,7 @@ class HDL:
         if self.top_first:
             res.append(converted)
 
-        for submodule, _ in self.module.submodules:
+        for submodule in self.module.submodules:
             if isinstance(submodule, celosia_module.InstanceModule):
                 continue
             res.append(self._convert_module(submodule))
@@ -209,40 +224,21 @@ class HDL:
 
         return ports, initials, assignments, blocks
 
-    def _generate_submodule(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict) -> str:
+    def _generate_submodule(self, submodule: celosia_module.Module) -> str:
         return ''
 
-    def _generate_submodule_features(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict):
+    def _generate_submodule_features(self, submodule: celosia_module.Module):
         return
 
     def _generate_submodules(self) -> str:
         submodules: list[str] = []
 
-        for submodule, ports in self.module.submodules:
-            params = {}
-            if not isinstance(submodule, celosia_module.InstanceModule):
-                if ports is not None:
-                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {self.module.name}")
+        for submodule in self.module.submodules:
+            if submodule.empty:
+                continue
 
-                if submodule.empty:
-                    continue
-
-                ports = {}
-                for port in submodule.ports:
-                    if not len(port.signal):
-                        continue
-                    # if port.signal not in module.signals:
-                    #     raise RuntimeError(f"Found port {port.signal.name} of submodule {name} which is not a signal of {module.name}")
-                    ports[port.signal.name] = port
-
-            else:
-                if ports is None:
-                    raise RuntimeError(f"Found invalid submodule configuration for submodule {submodule.name} of module {self.module.name}")
-
-                params.update(submodule.parameters)
-
-            submodules.append(self._generate_submodule(submodule, ports, params))
-            self._generate_submodule_features(submodule, ports, params)
+            submodules.append(self._generate_submodule(submodule))
+            self._generate_submodule_features(submodule)
 
         return '\n'.join(submodules)
 

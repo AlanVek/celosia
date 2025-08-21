@@ -71,6 +71,14 @@ class Signal:
     def __len__(self):
         return len(self.signal)
 
+    @property
+    def name(self) -> str:
+        return self.signal.name
+
+    @name.setter
+    def name(self, value:str) -> None:
+        self.signal.name = value
+
 class RemappedSignal(Signal):
     def __init__(self, signal: ast.Signal, sync_signal: ast.Signal):
         super().__init__(signal, domain=None)
@@ -89,9 +97,23 @@ class Port(Signal):
     def __init__(self, signal: ast.Signal, direction: str, domain: ir.ClockDomain = None):
         super().__init__(signal, domain)
         self.direction = direction
+        self._alt_name: str = None
 
         # if self.direction == 'i':
         #     self.reset_statement = None
+
+    def set_alt_name(self, value: str):
+        self._alt_name = value
+
+    @property
+    def name(self) -> str:
+        if self._alt_name is not None:
+            return self._alt_name
+        return super().name
+
+    @name.setter
+    def name(self, value:str) -> None:
+        self.signal.name = value
 
 class Memory(Signal):
     def __init__(self, signal: ast.Signal, init: list = None):

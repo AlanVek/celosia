@@ -79,7 +79,7 @@ endmodule
     def _generate_signal(self, mapping: celosia_signal.Signal, size: bool = True) -> str:
         # TODO: Check what to do with zero-width signals
         # if len(mapping.signal) <= 0:
-        #     raise RuntimeError(f"Zero-width mapping {mapping.signal.name} not allowed")
+        #     raise RuntimeError(f"Zero-width mapping {mapping.name} not allowed")
 
         if not size or len(mapping.signal) <= 1:
             width = ''
@@ -88,12 +88,12 @@ endmodule
 
         if size and isinstance(mapping, celosia_signal.Memory):
             if len(mapping.init) <= 0:
-                raise RuntimeError(f"Zero-depth memory {mapping.signal.name} not allowed")
+                raise RuntimeError(f"Zero-depth memory {mapping.name} not allowed")
             depth = f' [{len(mapping.init) - 1}:0]'
         else:
             depth = ''
 
-        return f'{width}{mapping.signal.name}{depth}'
+        return f'{width}{mapping.name}{depth}'
 
     def _generate_port(self, port: celosia_signal.Port) ->str:
         return self._generate_signal(port, size=False)
@@ -132,7 +132,7 @@ endmodule
             res += '\n'.join((
                 '',
                 'initial begin',
-                *[f'{self.tabs()}{mapping.signal.name}[{i}] = {self._parse_rhs(reset)};' for i, reset in enumerate(mapping.init)],
+                *[f'{self.tabs()}{mapping.name}[{i}] = {self._parse_rhs(reset)};' for i, reset in enumerate(mapping.init)],
                 'end',
             ))
 
@@ -153,7 +153,7 @@ endmodule
         if stop_idx is None:
             stop_idx = len(mapping.signal)
 
-        repr = mapping.signal.name
+        repr = mapping.name
 
         size = len(mapping.signal)
 
@@ -283,20 +283,20 @@ endmodule
             'endcase',
         ))
 
-    def _generate_submodule(self, submodule: celosia_module.Module, ports: dict[str, celosia_signal.Port], parameters: dict):
+    def _generate_submodule(self, submodule: celosia_module.Module):
         res = ''
 
         res += f'{submodule.type}'
 
-        if parameters:
+        if submodule.parameters:
             res += ' #(\n'
-            for key, value in parameters.items():
+            for key, value in submodule.parameters.items():
                 res += f'{self.tabs()}.{key}({self._parse_rhs(value)}),\n'   # TODO: Check types
             res = res[:-2] + '\n)'
 
         res += f' {submodule.name} (\n'
-        for key, value in ports.items():
-            res += f'{self.tabs()}.{key}({self._parse_rhs(value.signal, allow_signed=False)}),\n'
+        for port in submodule.ports:
+            res += f'{self.tabs()}.{port.name}({self._parse_rhs(port.signal, allow_signed=False)}),\n'
 
         res = res[:-2] + '\n);'
 
@@ -321,7 +321,7 @@ endmodule
 
         elif isinstance(rhs, ast.Signal):
             signed = allow_signed and rhs.shape().signed
-            rhs = rhs.name
+            rhs = self.module.signals.get(rhs).name
             if signed:
                 rhs = f'$signed({rhs})'
         elif isinstance(rhs, ast.Cat):
