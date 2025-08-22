@@ -7,17 +7,12 @@ class Module:
 
     allow_remapping = True  # Not strictly necessary, but cocotb needs it to force-assign some signals
 
-    def __init__(self, name: str, fragment: Union[ir.Fragment, ir.Elaboratable], top: bool = True, type: str = None):
+    def __init__(self, name: str, fragment: ir.Fragment, top: bool = True, type: str = None):
         self.top = top
 
         self.name = name
         self.type = name if type is None else type
-        self._fragment = fragment
-        if top:
-            self.fragment = None
-        else:
-            self.fragment = fragment
-
+        self.fragment = fragment
         self.submodules: list[Module] = []
         self.signals: dict[ast.Signal, celosia_signal.Signal] = ast.SignalDict()
         self.ports: list[celosia_signal.Port] = []
@@ -85,13 +80,11 @@ class Module:
     def _add_new_assign(self, left: ast.Signal, right: ast.Value, start_idx: int = None, stop_idx: int = None) -> None:
         self._add_new_statement(left, celosia_statement.Assign(right, start_idx, stop_idx))
 
-    def prepare(self, ports: list = None, platform=None) -> None:
-        if self.top:
-            self.fragment = ir.Fragment.get(self._fragment, platform).prepare(ports)
-
+    def prepare(self) -> "Module":
         self._prepare_signals()
         self._prepare_statements()
         self._prepare_submodules()
+        return self
 
     def _prepare_signals(self) -> None:
 
@@ -584,8 +577,7 @@ class Module:
         return cls(name, fragment, top=False, **kwargs)
 
     def _process_memory(self, subfragment: ir.Fragment, name: str):
-        m = self._submodule_create(name, subfragment, MemoryModule)
-        m.prepare()
+        m = self._submodule_create(name, subfragment, MemoryModule).prepare()
 
         for signal, mapping in m.signals.items():
 
@@ -609,21 +601,36 @@ class Module:
             self._process_memory(subfragment, name)
             submodule = None
         else:
-            submodule = self._submodule_create(name, subfragment, InstanceModule)
-            submodule.prepare()
+            submodule = self._submodule_create(name, subfragment, InstanceModule).prepare()
             for i, (port_name, (port_value, kind)) in enumerate(subfragment.named_ports.items()):
                 local_signal = None
                 if kind == 'io':
-                    port = port_value   # TODO: Check how to handle!
-                    local_signal = self.signals.get(port_value, None)
+                    port = port_value
+
+                    # TODO: Possibly check more cases if needed
+                    if isinstance(port_value, ast.Const):
+                       pass
+                    elif isinstance(port_value, ast.Signal):
+                        local_signal = self.signals.get(port_value, None)
+                    elif isinstance(port_value, ast.Slice) and isinstance(port_value.value, ast.Signal):
+                        local_signal = self.signals.get(port_value.value, None)
+                    else:
+                        raise NotImplementedError(f"IO port {port_value} not supported for port {port_name} of submodule {submodule.name} of module {self.name}")
                 else:
-                    # Special case for ports tied to constants/signals -- We can reduce some logic
-                    if kind == 'i' and (
+                    # Special case for ports tied to constants/signals/slice of signal -- We can reduce some logic
+                    if (
                         isinstance(port_value, ast.Const) or
-                        (isinstance(port_value, ast.Signal) and port_value in self.signals)
+                        (isinstance(port_value, ast.Signal) and port_value in self.signals) or
+                        (isinstance(port_value, ast.Slice) and isinstance(port_value.value, ast.Signal) and port_value.value in self.signals)
                     ):
                         port = port_value
+                        if kind == 'o':
+                            if isinstance(port_value, ast.Signal):
+                                local_signal = self.signals.get(port_value, None)
+                            elif isinstance(port_value, ast.Slice):
+                                local_signal = self.signals.get(port_value.value, None)
                     else:
+                        # TODO: Better port naming?
                         port = new_port = self._new_signal(port_value.shape(), prefix=f'port_{port_name}')
                         if kind == 'i':
                             self._execute_statements([new_port.eq(port_value)])
