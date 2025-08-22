@@ -112,9 +112,11 @@ class HDL:
         for submodule in module.submodules:
             self._cleanup_names(submodule)
 
-    def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None):
-        m = celosia_module.Module(name, fragment)
-        m.prepare(ports, platform)
+    def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None, fragment_prepare: bool = True):
+        if fragment_prepare:
+            fragment = ir.Fragment.get(fragment, platform).prepare(ports)
+
+        m = celosia_module.Module(name, fragment).prepare()
 
         self.invalid_names.clear()
         self.invalid_names.add('')

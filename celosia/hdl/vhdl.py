@@ -660,6 +660,7 @@ def convert(
     ports: list[ast.Signal] = None,
     platform = None,
     spaces: int = 4,
+    fragment_prepare: bool = True,
     blackboxes: list[dict[str, Union[int, str, tuple]]] = None,
 ):
     return VHDL(
@@ -670,4 +671,5 @@ def convert(
         name = name,
         ports = ports,
         platform = platform,
+        fragment_prepare = fragment_prepare,
     )
