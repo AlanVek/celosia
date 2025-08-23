@@ -66,7 +66,7 @@ class Signal:
         return self.signal.shape()
 
     def _rhs_signals(self):
-        return [self.signal]
+        return self.signal._rhs_signals()
 
     def __len__(self):
         return len(self.signal)
