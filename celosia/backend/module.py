@@ -238,6 +238,7 @@ class Module:
         # For example: assign x = Cat(Slice, Part) ---> x = Cat(new_slice, new_part) instead of x = new_signal_for_cat
 
         _division_fix = kwargs.get('_division_fix', False)
+        io = kwargs.get('io', False)
 
         if isinstance(rhs, ast.Const):
             pass
@@ -253,11 +254,24 @@ class Module:
             elif len(parts) == 1:
                 rhs = self._process_rhs(parts[0], **kwargs)
             else:
-                new_rhs = self._new_signal(rhs.shape(), prefix='concat')
-                rhs.parts = [self._process_rhs(part, **kwargs) for part in parts if len(part)]
+                new_parts = []
+                for part in rhs.parts:
+                    if not len(part):
+                        continue
+                    new_part = self._process_rhs(part, **kwargs)
 
-                self._add_new_assign(new_rhs, rhs)
-                rhs = new_rhs
+                    # FIX: With io=True, we may return a Cat, and we don't want to have Cat(.., Cat(...))
+                    if isinstance(new_part, ast.Cat):
+                        new_parts.extend(new_part.parts)
+                    else:
+                        new_parts.append(new_part)
+
+                rhs.parts = new_parts
+
+                if not io:
+                    new_rhs = self._new_signal(rhs.shape(), prefix='concat')
+                    self._add_new_assign(new_rhs, rhs)
+                    rhs = new_rhs
 
         elif isinstance(rhs, ast.Slice):
             if rhs.start >= rhs.stop:
@@ -269,7 +283,7 @@ class Module:
                     rhs = rhs.value
                 elif isinstance(rhs.value, ast.Const):
                     rhs = self._slice_check_const(rhs.value, rhs.start, rhs.stop)
-                else:
+                elif not io:
                     new_rhs = self._new_signal(rhs.shape(), prefix='slice')
                     self._add_new_assign(new_rhs, rhs)
                     rhs = new_rhs
@@ -277,6 +291,9 @@ class Module:
         elif isinstance(rhs, ast.Operator):
             for i, operand in enumerate(rhs.operands):
                 rhs.operands[i] = self._process_rhs(operand, **kwargs)
+
+            if io:
+                raise RuntimeError(f"Invalid assignment for IO: {rhs}")
 
             if not _division_fix and rhs.operator == '//' and len(rhs.operands) == 2:
                 dividend, divisor, signed = self._signed_division_fix(rhs)
@@ -309,6 +326,9 @@ class Module:
             if not rhs.elems:
                 rhs = self._zero_size_signal()
             else:
+                if io:
+                    raise RuntimeError("Can't generate IO with Array")
+
                 for i, elem in enumerate(rhs.elems):
                     rhs.elems[i] = self._process_rhs(elem, **kwargs)
 
@@ -603,47 +623,33 @@ class Module:
         else:
             submodule = self._submodule_create(name, subfragment, InstanceModule).prepare()
             for i, (port_name, (port_value, kind)) in enumerate(subfragment.named_ports.items()):
-                local_signal = None
-                if kind == 'io':
-                    port = port_value
+                local_signals: list[celosia_signal.Signal] = []
 
-                    # TODO: Possibly check more cases if needed
-                    if isinstance(port_value, ast.Const):
-                       pass
-                    elif isinstance(port_value, ast.Signal):
-                        local_signal = self.signals.get(port_value, None)
-                    elif isinstance(port_value, ast.Slice) and isinstance(port_value.value, ast.Signal):
-                        local_signal = self.signals.get(port_value.value, None)
+                try:
+                    # We're here for IO, but for I and O ports tied to constants/signals/slice/cat we can reduce some logic
+                    port = self._process_rhs(port_value, io=True)
+                    if kind in ['o', 'io']:
+                        local_signals.extend([self.signals.get(signal, None) for signal in port._rhs_signals()])
+
+                except RuntimeError as e:
+                    if kind == 'io':
+                        raise e from None
+
+                    # TODO: Better port naming?
+                    port = new_port = self._new_signal(port_value.shape(), prefix=f'port_{port_name}')
+                    if kind == 'i':
+                        self._execute_statements([new_port.eq(port_value)])
+                    elif kind == 'o':
+                        self._execute_statements([port_value.eq(new_port)])
+                        local_signals.append(self.signals[new_port])
                     else:
-                        raise NotImplementedError(f"IO port {port_value} not supported for port {port_name} of submodule {submodule.name} of module {self.name}")
-                else:
-                    # Special case for ports tied to constants/signals/slice of signal -- We can reduce some logic
-                    if (
-                        isinstance(port_value, ast.Const) or
-                        (isinstance(port_value, ast.Signal) and port_value in self.signals) or
-                        (isinstance(port_value, ast.Slice) and isinstance(port_value.value, ast.Signal) and port_value.value in self.signals)
-                    ):
-                        port = port_value
-                        if kind == 'o':
-                            if isinstance(port_value, ast.Signal):
-                                local_signal = self.signals.get(port_value, None)
-                            elif isinstance(port_value, ast.Slice):
-                                local_signal = self.signals.get(port_value.value, None)
-                    else:
-                        # TODO: Better port naming?
-                        port = new_port = self._new_signal(port_value.shape(), prefix=f'port_{port_name}')
-                        if kind == 'i':
-                            self._execute_statements([new_port.eq(port_value)])
-                        elif kind == 'o':
-                            self._execute_statements([port_value.eq(new_port)])
-                            local_signal = self.signals[new_port]
-                        else:
-                            raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
+                        raise RuntimeError(f"Unknown port type for port {port_name} for submodule {submodule.name} of module {self.name}: {kind}")
 
                 submodule.ports[i].signal = port
 
-                if local_signal is not None:
-                    local_signal.disable_reset_statement()
+                for local_signal in local_signals:
+                    if local_signal is not None:
+                        local_signal.disable_reset_statement()
 
         return submodule
 
