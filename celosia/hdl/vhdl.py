@@ -43,8 +43,8 @@ use ieee.numeric_std.all;
 use ieee.numeric_std_unsigned.all;
 
 entity {name} is
-    port ({ports}
-    );
+{tabs}port ({ports}
+{tabs});
 end {name};
 
 architecture rtl of {name} is{components}{types}{initials}

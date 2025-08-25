@@ -160,6 +160,7 @@ class HDL:
                 'submodules': submodules, **features,
             }.items()},
         }
+        formats['tabs'] = self.tabs()
 
         converted = self.template.format(**formats)
         res = []
