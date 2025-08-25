@@ -79,6 +79,10 @@ class Signal:
     def name(self, value:str) -> None:
         self.signal.name = value
 
+    @property
+    def attrs(self) -> dict:
+        return self.signal.attrs
+
 class RemappedSignal(Signal):
     def __init__(self, signal: ast.Signal, sync_signal: ast.Signal):
         super().__init__(signal, domain=None)
@@ -116,13 +120,18 @@ class Port(Signal):
         self.signal.name = value
 
 class Memory(Signal):
-    def __init__(self, signal: ast.Signal, init: list = None):
+    def __init__(self, signal: ast.Signal, init: list = None, attrs: dict = None):
         super().__init__(signal)
         self.init = [] if init is None else init
+        self._attrs = {} if attrs is None else attrs
 
     @property
     def reset_statement(self):
         return None
+
+    @property
+    def attrs(self) -> dict:
+        return self._attrs
 
 class MemoryPort(Signal):
     def __init__(self, signal: ast.Signal, memory: Memory, index: ast.Signal, domain: ir.ClockDomain = None):

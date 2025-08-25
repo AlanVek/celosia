@@ -621,7 +621,7 @@ class Module:
                 for statement in mapping.statements:
                     self.signals[signal].add_statement(statement)
 
-    def _process_submodule_instance(self, subfragment: ir.Fragment, name: str) -> "Module":
+    def _process_submodule_instance(self, subfragment: ir.Instance, name: str) -> "Module":
         if subfragment.type == "$mem_v2":   # TODO: Check if there's a better way to determine this
             self._process_memory(subfragment, name)
             submodule = None
@@ -684,8 +684,9 @@ class Module:
                 self.submodules.append(submodule)
 
 class InstanceModule(Module):
-    def __init__(self, name: str, fragment: ir.Fragment, top: bool = True):
+    def __init__(self, name: str, fragment: ir.Instance, top: bool = True):
         super().__init__(name, fragment, top=top, type=fragment.type)
+        self.attrs = fragment.attrs
 
     def _prepare_signals(self) -> None:
         super()._prepare_signals()
@@ -802,6 +803,7 @@ class MemoryModule(Module):
             prefix  = self.name,
             mapping = celosia_signal.Memory,
             init    = self._init,
+            attrs   = self.fragment.attrs,
         )]
 
 

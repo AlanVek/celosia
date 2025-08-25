@@ -4,7 +4,7 @@ import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir
-from typing import Union
+from typing import Union, Any
 
 class VHDL(HDL):
     case_sensitive = False
@@ -58,6 +58,7 @@ end rtl;
         self._types: dict[celosia_signal.Memory, list[tuple[int, str]]] = {}
         self._typenames: list[str] = []
         self._processes: set[str] = set()
+        self._attrs: dict[str, str] = {}
 
         if blackboxes is not None:
             raise NotImplementedError("Blackboxes not supported yet!")
@@ -112,6 +113,7 @@ end rtl;
         self._types.clear()
         self._typenames.clear()
         self._processes.clear()
+        self._attrs.clear()
 
         self.signal_features['types'] = []
         self.submodule_features['components'] = []
@@ -238,6 +240,33 @@ end rtl;
                 ')',
             ))
 
+    def _parse_attribute(self, key: str, value: Any) -> tuple[str, str]:
+        if isinstance(value, bool):
+            value = str(value).lower()
+            type = 'boolean'
+
+        elif isinstance(value, (int, ast.Const)):
+            if isinstance(value, ast.Const):
+                value = value.value
+
+            if abs(value) < 2**32:
+                type = 'integer'
+            else:
+                type = 'string'
+                value = f'"{value}"'
+
+        else:
+            type = 'string'
+            if isinstance(value, str):
+                value = value.replace('"', '""')
+            value = f'"{value}"'
+
+        prev_type = self._attrs.setdefault(key, type)
+        if prev_type != type:
+            raise RuntimeError(f"Unable to generate module '{self.module.name}': attribute '{key}' needs type '{type}' but has already been declared with type '{prev_type}'")
+
+        return type, value
+
     def _generate_initial(self, mapping: celosia_signal.Signal):
         # celosia_signal.Memory ports don't have initials, they're created with the parent signal's celosia_signal.Memory
         if isinstance(mapping, celosia_signal.MemoryPort):
@@ -252,7 +281,14 @@ end rtl;
         else:
             reset = mapping.signal.reset
 
-        return f'signal {self._generate_signal(mapping)} := {self._generate_reset(reset, len(mapping.signal))};'
+        res = f'signal {self._generate_signal(mapping)} := {self._generate_reset(reset, len(mapping.signal))};'
+
+        for key, value in mapping.attrs.items():
+            type, value = self._parse_attribute(key, value)
+            res += f'\nattribute {key} : {type};'
+            res += f'\nattribute {key} of {mapping.name} : signal is {value};'
+
+        return res
 
     def _generate_assignment(self, mapping: celosia_signal.Signal, statement: celosia_statement.Assign):
         start_idx = statement._start_idx

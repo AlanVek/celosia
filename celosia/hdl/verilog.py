@@ -105,28 +105,32 @@ endmodule
         if isinstance(mapping, celosia_signal.MemoryPort):
             return res
 
-        if isinstance(mapping, celosia_signal.Signal):
-            reset = None
-            dir = ''
+        reset = None
+        dir = ''
 
-            if isinstance(mapping, celosia_signal.Memory):
-                type = 'reg'
+        if isinstance(mapping, celosia_signal.Memory):
+            type = 'reg'
+        else:
+            if mapping.static:
+                type = 'wire'
             else:
-                if mapping.static:
-                    type = 'wire'
-                else:
-                    type = 'reg'
-                    if mapping.domain is not None:
-                        reset = self._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
+                type = 'reg'
+                if mapping.domain is not None:
+                    reset = self._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
 
-                if isinstance(mapping, celosia_signal.Port):
-                    dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
-                    dir += ' '
+            if isinstance(mapping, celosia_signal.Port):
+                dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
+                dir += ' '
 
-            res += f'{dir}{type} {self._generate_signal(mapping)}'
-            if reset is not None:
-                res += f' = {reset}'
-            res += ';'
+        for key, value in mapping.attrs.items():
+            if isinstance(value, int):
+                value = ast.Const(value, max(32, value.bit_length()))
+            res += f'(* {key} = {self._parse_rhs(value, allow_signed=False)} *)\n'
+
+        res += f'{dir}{type} {self._generate_signal(mapping)}'
+        if reset is not None:
+            res += f' = {reset}'
+        res += ';'
 
         if isinstance(mapping, celosia_signal.Memory):
             res += '\n'.join((
@@ -304,7 +308,7 @@ endmodule
 
     def _parse_rhs(self, rhs: Union[ast.Value, int, str, celosia_signal.MemoryPort], allow_signed: bool = True):
         if isinstance(rhs, ast.Const):
-            signed = rhs.signed
+            signed = rhs.signed and allow_signed
             value = rhs.value
             if value < 0:
                 value += 2**rhs.width
@@ -317,7 +321,7 @@ endmodule
             pass
 
         elif isinstance(rhs, str):
-            rhs = f'"{rhs}"'
+            rhs = f'"{rhs.replace('"', '\\"')}"'
 
         elif isinstance(rhs, ast.Signal):
             signed = allow_signed and rhs.shape().signed
