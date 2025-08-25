@@ -46,6 +46,33 @@ if __name__ == '__main__':
 
 For more complete examples, see the files in [`examples/`](examples/).
 
+## Celosia Platform
+
+Celosia provides a custom `Platform` class for advanced integration with Amaranth's build system. This allows you to use Celosia as a drop-in replacement for HDL code generation in Amaranth workflows.
+
+Import the Platform:
+
+```python
+from celosia import Platform
+```
+
+You can wrap an existing Amaranth `TemplatedPlatform` to use Celosia:
+
+```python
+# ... create your AmaranthPlatform instance ...
+platform = Platform.from_amaranth_platform(platform)
+```
+
+This will keep the platform unmodified, and it will just replace internal methods used to generate the HDL output. Now, when you call `platform.build(...)`, you can specify the HDL output language using the `lang` parameter:
+
+```python
+platform.build(elaboratable, lang='verilog')  # or lang='vhdl'
+```
+
+Celosia's `Platform` overwrites the `toolchain_prepare` method of Amaranth's platform, allowing the `build()` function to accept a new `lang` parameter (`'verilog'` or `'vhdl'`). This enables Celosia to generate HDL outputs directly, bypassing Yosys, and supporting both Verilog and VHDL code generation.
+
+See the source in [`celosia/platform/platform.py`](celosia/platform/platform.py) for details.
+
 ## Project Status
 
 This project is under active development. Many features are incomplete or experimental. Contributions and feedback are welcome!

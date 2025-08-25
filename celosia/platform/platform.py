@@ -7,25 +7,6 @@ import os
 import jinja2
 
 class Platform(TemplatedPlatform):
-    def build(self, elaboratable, name="top",
-              build_dir="build", do_build=True,
-              program_opts=None, do_program=False,
-              lang='verilog', **kwargs):
-
-        if program_opts is None:
-            program_opts = {}
-        program_opts['lang'] = lang
-
-        return super().build(
-            elaboratable,
-            name=name,
-            build_dir=build_dir,
-            do_build=do_build,
-            program_opts=program_opts,
-            do_program=do_program,
-            **kwargs
-        )
-
     @staticmethod
     def from_amaranth_platform(platform: TemplatedPlatform):
         if platform is not None:
