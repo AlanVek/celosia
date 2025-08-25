@@ -3,6 +3,8 @@ import celosia.backend.signal as celosia_signal
 import celosia.backend.statement as celosia_statement
 from typing import Union
 
+# TODO: If we find multiple signals with same statements, maybe we can merge them into one!
+
 class Module:
 
     allow_remapping = True  # Not strictly necessary, but cocotb needs it to force-assign some signals

@@ -1,24 +1,12 @@
-import celosia.hdl as celosia_hdl
+from celosia.hdl import get_lang_map
 from amaranth.build.plat import TemplatedPlatform, tool_env_var, __version__, Iterable
 from amaranth.build.run import BuildPlan
 import textwrap
 import re
 import os
 import jinja2
-import importlib
-import pkgutil
 
 class Platform(TemplatedPlatform):
-
-    @staticmethod
-    def get_lang_map() -> dict[str, type[celosia_hdl.HDL]]:
-        lang_map: dict[str, type[celosia_hdl.HDL]] = {}
-        for _, name, _ in pkgutil.iter_modules(celosia_hdl.__path__, celosia_hdl.__name__ + "."):
-            for HDLType in importlib.import_module(name).__dict__.values():
-                if isinstance(HDLType, type) and issubclass(HDLType, celosia_hdl.HDL):
-                    lang_map[name.split('.')[-1]] = HDLType
-        return lang_map
-
     def build(self, elaboratable, name="top",
               build_dir="build", do_build=True,
               program_opts=None, do_program=False,
@@ -66,7 +54,7 @@ class Platform(TemplatedPlatform):
         if not isinstance(lang, str):
             raise ValueError(f"Invalid 'lang': {lang}")
 
-        ConverterClass = Platform.get_lang_map().get(lang.lower(), None)
+        ConverterClass = get_lang_map().get(lang.lower(), None)
         if ConverterClass is None:
             raise ValueError(f"Unknown 'lang': {lang}")
 

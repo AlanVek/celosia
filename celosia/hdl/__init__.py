@@ -4,8 +4,8 @@ import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
 from amaranth.hdl import ast, ir
 from typing import Union
-
-# TODO: If we find multiple signals with same statements, maybe we can merge them into one!
+import importlib
+import pkgutil
 
 class HDL:
     case_sensitive = False
@@ -285,3 +285,11 @@ class HDL:
             return ''
 
         return ' ' * (self.spaces * n)
+
+def get_lang_map() -> dict[str, type[HDL]]:
+    lang_map: dict[str, type[HDL]] = {}
+    for _, name, _ in pkgutil.iter_modules(__path__, __name__ + '.'):
+        for HDLType in importlib.import_module(name).__dict__.values():
+            if isinstance(HDLType, type) and issubclass(HDLType, HDL):
+                lang_map[name.split('.')[-1]] = HDLType
+    return lang_map
