@@ -532,7 +532,7 @@ end rtl;
         if isinstance(rhs, ast.Const):
             signed = rhs.signed
             value = rhs.value
-            width = rhs.width
+            width = max(size, rhs.width)
 
             if value < 0:
                 value += 2**width

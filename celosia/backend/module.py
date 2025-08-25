@@ -519,7 +519,7 @@ class Module:
 
                 if len(rhs) < size or (len(rhs) > size and not _allow_upsize):
                     new_rhs = self._new_signal(ast.Shape(size, signed=signed), prefix = 'expanded_op')
-                    self._add_new_assign(new_rhs, rhs, stop_idx=size)
+                    self._add_new_assign(new_rhs, self._process_rhs(rhs[:size]), stop_idx=size)
                     rhs = new_rhs
 
             else:
