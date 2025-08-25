@@ -43,6 +43,10 @@ class Verilog(HDL):
 endmodule
 """
 
+    extension = 'v'
+    open_comment = '/* '
+    close_comment = ' */'
+
     def sanitize(self, name: str) -> str:
         name = super().sanitize(name).strip()
 
@@ -321,7 +325,8 @@ endmodule
             pass
 
         elif isinstance(rhs, str):
-            rhs = f'"{rhs.replace('"', '\\"')}"'
+            rhs = rhs.replace('"', '\\"')
+            rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
             signed = allow_signed and rhs.shape().signed

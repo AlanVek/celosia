@@ -12,6 +12,10 @@ class HDL:
     portsep = ','
     top_first = True
 
+    extension = ''
+    open_comment = ''
+    close_comment = ''
+
     template = """{name}
 {ports}{initials}{submodules}{blocks}{assignments}
 """
@@ -23,6 +27,8 @@ class HDL:
 
         self.module: celosia_module.Module = None
         self.invalid_names: set[str] = set()
+        self.name_map: dict[ast.SignalDict, tuple[str, ...]] = ast.SignalDict()
+        self.hierarchy: tuple[str, ...] = ()
 
     def sanitize(self, name: str) -> str:
         return name
@@ -118,6 +124,8 @@ class HDL:
 
         m = celosia_module.Module(name, fragment).prepare()
 
+        self.name_map.clear()
+        self.hierarchy = ()
         self.invalid_names.clear()
         self.invalid_names.add('')
 
@@ -133,6 +141,7 @@ class HDL:
         self.module = module
 
         self.reset()
+        self.hierarchy = self.hierarchy + (module.name,)
 
         if self.module.empty:
             return ''
@@ -158,9 +167,11 @@ class HDL:
         if self.top_first:
             res.append(converted)
 
+        hierarchy = self.hierarchy
         for submodule in self.module.submodules:
             if isinstance(submodule, celosia_module.InstanceModule):
                 continue
+            self.hierarchy = hierarchy
             res.append(self._convert_module(submodule))
 
         if not self.top_first:
@@ -192,6 +203,9 @@ class HDL:
         for mapping in self.module.signals.values():
             if not len(mapping.signal):
                 continue
+
+            # TODO: Check memories
+            self.name_map[mapping.signal] = self.hierarchy + (mapping.name,)
 
             new_initial = self._generate_initial(mapping)
             if new_initial:

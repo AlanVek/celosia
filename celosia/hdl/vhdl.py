@@ -52,6 +52,9 @@ begin{submodules}{blocks}{assignments}
 end rtl;
 """
 
+    extension = 'vhd'
+    open_comment = '-- '
+
     def __init__(self, spaces: int = 4, blackboxes: list[dict[str, Union[int, str, tuple]]] = None):
         super().__init__(spaces=spaces)
         self._blackboxes = blackboxes
@@ -558,6 +561,7 @@ end rtl;
             pass
 
         elif isinstance(rhs, str):
+            rhs = rhs.replace('"', '""')
             rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
