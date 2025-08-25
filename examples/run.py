@@ -5,11 +5,6 @@ from pathlib import Path
 import argparse
 import logging
 
-hdl_extensions = {
-    'verilog': 'v',
-    'vhdl': 'vhd',
-}
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', required=False, default=None, help='Base path to find tests. Can be a file or a directory (defaults to .)')
@@ -17,7 +12,8 @@ def main():
     parser.add_argument('-o', '--output', required=True, default=None, help='Output directory to store results')
     parser.add_argument('--all', required=False, action='store_true', default=False, help='Convert to all HDL languages')
 
-    for name in hdl_extensions:
+    lang_map = celosia.get_lang_map()
+    for name in lang_map.keys():
         parser.add_argument(f'--{name}', required=False, action='store_true', default=False, help=f'Convert to {name}')
 
     args = parser.parse_args()
@@ -40,11 +36,10 @@ def main():
     os.makedirs(str(output_path), exist_ok=True)
 
     hdl_mappings = []
-    for name, extension in hdl_extensions.items():
-        function = getattr(getattr(celosia, name, None), 'convert', None)
-        if callable(function):
-            extension = extension[extension.rfind(".")+1:]
-            hdl_mappings.append((function, f'.{extension}', getattr(args, name)))
+    for name, HDLType in lang_map.items():
+        hdl_mappings.append(
+            (HDLType().convert, f'.{HDLType.extension}', getattr(args, name))
+        )
 
     for file in input_files:
 
