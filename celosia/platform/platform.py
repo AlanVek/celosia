@@ -40,7 +40,8 @@ class Platform(TemplatedPlatform):
 
     @staticmethod
     def from_amaranth_platform(platform: TemplatedPlatform):
-        platform.toolchain_prepare = Platform.toolchain_prepare.__get__(platform)
+        if platform is not None:
+            platform.toolchain_prepare = Platform.toolchain_prepare.__get__(platform)
         return platform
 
     def toolchain_prepare(self, fragment, name, *, emit_src=True, **kwargs):
