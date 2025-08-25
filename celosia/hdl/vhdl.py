@@ -240,7 +240,7 @@ end rtl;
                 ')',
             ))
 
-    def _parse_attribute(self, key: str, value: Any) -> tuple[str, str]:
+    def _parse_attribute(self, key: str, value: Any) -> tuple[str, str, bool]:
         if isinstance(value, bool):
             value = str(value).lower()
             type = 'boolean'
@@ -261,11 +261,16 @@ end rtl;
                 value = value.replace('"', '""')
             value = f'"{value}"'
 
-        prev_type = self._attrs.setdefault(key, type)
-        if prev_type != type:
-            raise RuntimeError(f"Unable to generate module '{self.module.name}': attribute '{key}' needs type '{type}' but has already been declared with type '{prev_type}'")
+        prev_type = self._attrs.get(key, None)
+        if prev_type is None:
+            declare = True
+            self._attrs[key] = type
+        else:
+            declare = False
+            if prev_type != type:
+               raise RuntimeError(f"Unable to generate module '{self.module.name}': attribute '{key}' needs type '{type}' but has already been declared with type '{prev_type}'")
 
-        return type, value
+        return type, value, declare
 
     def _generate_initial(self, mapping: celosia_signal.Signal):
         # celosia_signal.Memory ports don't have initials, they're created with the parent signal's celosia_signal.Memory
@@ -284,8 +289,9 @@ end rtl;
         res = f'signal {self._generate_signal(mapping)} := {self._generate_reset(reset, len(mapping.signal))};'
 
         for key, value in mapping.attrs.items():
-            type, value = self._parse_attribute(key, value)
-            res += f'\nattribute {key} : {type};'
+            type, value, declare = self._parse_attribute(key, value)
+            if declare:
+                res += f'\nattribute {key} : {type};'
             res += f'\nattribute {key} of {mapping.name} : signal is {value};'
 
         return res
