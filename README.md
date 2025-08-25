@@ -63,7 +63,7 @@ You can wrap an existing Amaranth `TemplatedPlatform` to use Celosia:
 platform = Platform.from_amaranth_platform(platform)
 ```
 
-**This will keep the platform unmodified**: type, internal variables, parameters, etc., will not be changed, copied or removed **at all**. It justs replaces internal methods used to generate the HDL output, so that when you call `platform.build(...)`, you can specify the HDL output language using the `lang` parameter:
+**This will keep the platform unmodified**: type, internal variables, parameters, etc., will not be changed, copied or removed **at all**. It just replaces internal methods used to generate the HDL output, so that when you call `platform.build(...)`, you can specify the HDL output language using the `lang` parameter:
 
 ```python
 platform.build(elaboratable, lang='verilog')  # or lang='vhdl'
