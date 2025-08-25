@@ -253,7 +253,6 @@ class Module:
         # TODO: Possibly receive a "top" parameter, so that the first layer doesn't need to create a new signal
         # For example: assign x = Cat(Slice, Part) ---> x = Cat(new_slice, new_part) instead of x = new_signal_for_cat
 
-        _division_fix = kwargs.get('_division_fix', False)
         io = kwargs.get('io', False)
 
         if isinstance(rhs, ast.Const):
@@ -300,17 +299,8 @@ class Module:
             if io:
                 raise RuntimeError(f"Invalid assignment for IO: {rhs}")
 
-            if not _division_fix and rhs.operator == '//' and len(rhs.operands) == 2:
-                dividend, divisor, signed = self._signed_division_fix(rhs)
-                kwargs['_division_fix'] = True
-
-                if signed:
-                    signed = lambda x: ast.signed(x)
-                else:
-                    signed = lambda x: x
-
-                real_div = dividend//divisor
-                new_rhs = self._process_rhs(ast.Mux(divisor == ast.Const(0, signed(len(divisor))), ast.Const(0, signed(len(real_div))), real_div), **kwargs)
+            if rhs.operator == '//' and len(rhs.operands) == 2:
+                new_rhs = self._division_fix(rhs, **kwargs)
 
             else:
                 new_rhs = self._new_signal(rhs.shape(), prefix='operand')
@@ -358,14 +348,10 @@ class Module:
 
         return rhs
 
-    def _signed_division_fix(self, rhs: ast.Operator) -> tuple[ast.Value, ast.Value]:
+    def _division_fix(self, rhs: ast.Operator, **kwargs) -> ast.Value:
         dividend, divisor = rhs.operands
 
-        signed = False
-
         if any(operand.shape().signed for operand in rhs.operands):
-            signed = True
-
             max_size = max(len(op) for op in rhs.operands) + 2
 
             if not dividend.shape().signed:
@@ -384,7 +370,11 @@ class Module:
                 dividend - ast.Mux(divisor[-1], divisor + ast.Const(1, len(divisor)), divisor - ast.Const(1, len(divisor)))
             ), size = len(dividend))
 
-        return dividend, divisor, signed
+        real_div = dividend//divisor
+        rhs_div = self._new_signal(real_div.shape(), prefix='division')
+        self._add_new_assign(rhs_div, real_div)
+
+        return self._fix_rhs_size(ast.Mux(divisor == 0, 0, rhs_div), **kwargs)
 
     def _fix_rhs_size(self, rhs: ast.Value, size: int = None, *, _force_sign: bool = None, _allow_upsize: bool = False):
         if size is None:
