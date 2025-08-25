@@ -308,7 +308,9 @@ class Module:
                     signed = lambda x: ast.signed(x)
                 else:
                     signed = lambda x: x
-                new_rhs = self._process_rhs(ast.Mux(divisor == ast.Const(0, signed(len(divisor))), ast.Const(0, signed(len(rhs))), dividend//divisor), **kwargs)
+
+                real_div = dividend//divisor
+                new_rhs = self._process_rhs(ast.Mux(divisor == ast.Const(0, signed(len(divisor))), ast.Const(0, signed(len(real_div))), real_div), **kwargs)
 
             else:
                 new_rhs = self._new_signal(rhs.shape(), prefix='operand')

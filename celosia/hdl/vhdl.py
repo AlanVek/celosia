@@ -606,7 +606,13 @@ end rtl;
                 elif rhs.operator == '~':
                     rhs = f'not {p0}'
                 elif rhs.operator == '-':
-                    rhs = f'std_logic_vector(-signed({p0}))'
+                    new_rhs = f'-signed({p0})'
+
+                    # FIX: -signal has +1 bit for Amaranth, but not for VHDL
+                    if len(rhs.operands[0]) < size:
+                        new_rhs = f'resize({new_rhs}, {size})'
+                    rhs = f'std_logic_vector({new_rhs})'
+
                 elif rhs.operator == 'b':
                     if allow_bool:
                         rhs = f'{p0} /= {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
