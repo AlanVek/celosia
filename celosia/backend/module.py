@@ -230,6 +230,22 @@ class Module:
 
         return res
 
+    @classmethod
+    def _open_concat(cls, concat: ast.Cat):
+        new_parts = []
+
+        for part in concat.parts:
+            if not len(part):
+                continue
+
+            if isinstance(part, ast.Cat):
+                cls._open_concat(part)
+                new_parts.extend(part.parts)
+            else:
+                new_parts.append(part)
+
+        concat.parts = new_parts
+
     def _process_rhs(self, rhs: ast.Value, **kwargs) -> ast.Value:
         # TODO: Possibly check if return value differs input value to determine whether a new signal is needed
         # so we can reduce code size
@@ -248,25 +264,14 @@ class Module:
                 self.signals[rhs] = celosia_signal.Signal(rhs)
 
         elif isinstance(rhs, ast.Cat):
+            self._open_concat(rhs)
             parts = [part for part in rhs.parts if len(part)]
             if len(parts) == 0:
                 rhs = self._zero_size_signal()
             elif len(parts) == 1:
                 rhs = self._process_rhs(parts[0], **kwargs)
             else:
-                new_parts = []
-                for part in rhs.parts:
-                    if not len(part):
-                        continue
-                    new_part = self._process_rhs(part, **kwargs)
-
-                    # FIX: With io=True, we may return a Cat, and we don't want to have Cat(.., Cat(...))
-                    if isinstance(new_part, ast.Cat):
-                        new_parts.extend(new_part.parts)
-                    else:
-                        new_parts.append(new_part)
-
-                rhs.parts = new_parts
+                rhs.parts = [self._process_rhs(part, **kwargs) for part in parts]
 
                 if not io:
                     new_rhs = self._new_signal(rhs.shape(), prefix='concat')
