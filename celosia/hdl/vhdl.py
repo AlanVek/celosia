@@ -644,18 +644,14 @@ end rtl;
             elif len(rhs.operands) == 2:
                 p0, p1 = parsed
 
-                resize = lambda x: x
-
-                if operation:
-                    resize = lambda x: f'std_logic_vector({x})'
-
-                if rhs.operator in ('+', '-', '*', '//', '%'):
-                    if any(len(operand) <= size for operand in rhs.operands):
-                        resize = lambda x: f'std_logic_vector(resize({x}, {size}))'
-
                 if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
                     operator = rhs.operator[0].replace("|", "or").replace('&', 'and').replace('^', 'xor').replace('%', 'rem')
-                    rhs = resize(f'{p0} {operator} {p1}')
+
+                    if rhs.operator in ('+', '-', '//', '%') and any(len(operand) < size for operand in rhs.operands):
+                        p0, p1 = (f'resize({p}, {size})' for p in parsed)
+
+                    rhs = f'std_logic_vector({p0} {operator} {p1})'
+
                 elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
                     operator = rhs.operator.replace('==', '=').replace('!=', '/=')
                     rhs = f'{p0} {operator} {p1}'
@@ -663,6 +659,9 @@ end rtl;
                         rhs = f'"1" when {rhs} else "0"'
                 elif rhs.operator in ('<<', '>>'):
                     offset = f'to_integer({self._parse_rhs(rhs.operands[1])})'
+
+                    # if len(rhs.operands[0]) < size:
+                    #     p0 = f'resize({p0}, {size})'
 
                     if rhs.operator == '>>':
                         fn = 'shift_right'
