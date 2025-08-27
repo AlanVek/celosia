@@ -13,4 +13,4 @@ dependencies = [
 requires = ["setuptools"]
 
 [tool.setuptools.packages.find]
-include = ["celosia"]
+include = ["celosia*"]
