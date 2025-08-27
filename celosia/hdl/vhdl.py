@@ -389,6 +389,25 @@ end rtl;
             '', # Add new line at the end to separate blocks
         ))
 
+    def _get_if_condition(self, condition: ast.Value) -> str:
+
+        if len(condition) != 1:
+            raise RuntimeError(f"Invalid condition, must have width 1: {condition}")
+
+        if isinstance(condition, ast.Slice):
+            condition = celosia_module.MemoryModule._slice_check_const(condition.value, condition.start, condition.stop)
+
+        if isinstance(condition, ast.Const):
+            # FIX: If '0'/'1' not allowed apparently
+            ret = 'false' if condition.value == 0 else 'true'
+
+        else:
+            ret = str(self._parse_rhs(condition, allow_signed=False, force_bool=True))
+            if isinstance(condition, ast.Signal):
+                ret = f'{ret}(0)'
+
+        return ret
+
     def _generate_if(self, mapping: celosia_signal.Signal, statement: celosia_statement.Statement, as_if: list[Union[celosia_statement.Switch.If, celosia_statement.Switch.Else]]):
         if_opening = 'if'
         else_done = False
@@ -407,23 +426,7 @@ end rtl;
                 else_done = True
                 begin = ''
 
-            if case.test is None:
-                test = ''
-            else:
-                idx = lambda x: x
-                if isinstance(case.test, ast.Signal):
-                    idx = lambda x: f'{x}(0)'
-
-                test = str(self._parse_rhs(case.test, force_bool=True))
-
-                # FIX: If '0'/'1' not allowed apparently
-                for possible_value in [0, 1]:
-                    if test == self._parse_rhs(ast.Const(possible_value, 1)[0], force_bool=True):
-                        test = f"std_logic'('{possible_value}') = std_logic'('1')"
-                        idx = lambda x: x
-                        break
-                test = f' {idx(test)}'
-
+            test = '' if case.test is None else f' {self._get_if_condition(case.test)}'
             ret += f'{opening}{test}{begin}'
 
             if case.statements:
@@ -720,22 +723,16 @@ end rtl;
         return rhs
 
     def _parse_ternary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
-        parsed = tuple(self._parse_rhs(op, allow_signed=(i!=0), force_bool=(i==0)) for i, op in enumerate(rhs.operands))
-        p0, p1, p2 = parsed
+        p0 = self._get_if_condition(rhs.operands[0])
+        parsed = tuple(self._parse_rhs(op) for op in rhs.operands[1:])
+        p1, p2 = parsed
 
         if rhs.operator == "m":
             if any(len(operand) > size for operand in rhs.operands[1:]):
                 p1 = f'{p1}({size-1} downto 0)'
                 p2 = f'{p2}({size-1} downto 0)'
 
-            if isinstance(rhs.operands[0], ast.Const):
-                if rhs.operands[0].value == 0:
-                    rhs = str(p2)
-                else:
-                    rhs = str(p1)
-            else:
-                idx = '(0)' if isinstance(rhs.operands[0], ast.Signal) else ''
-                rhs = f'{p1} when {p0}{idx} else {p2}'
+            rhs = f'{p1} when {p0} else {p2}'
         else:
             raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
