@@ -265,17 +265,6 @@ class Module:
         if isinstance(rhs, ast.Const):
             return ast.Const(rhs.value, shape)
 
-        elif isinstance(rhs, ast.Operator) and len(rhs.operands) == 2 and rhs.operator in ("<<", ">>", "**"):
-            if io:
-                raise RuntimeError(f"Invalid assignment for IO: {rhs}")
-            rhs.operands = [
-                self._process_rhs(rhs.operands[0], shape, **kwargs),
-                self._process_rhs(rhs.operands[1], **kwargs),
-            ]
-            new_rhs = self._new_signal(shape, prefix='shifted')
-            self._add_new_assign(new_rhs, rhs)
-            return new_rhs
-
         curr_shape: ast.Shape = rhs.shape()
 
         if curr_shape.width > shape.width:
@@ -340,7 +329,17 @@ class Module:
                     rhs.operands = [self._process_rhs(op, **kwargs) for op in rhs.operands]
 
             elif len(rhs.operands) == 2:
-                if shapes[0].signed == shapes[1].signed:
+                if rhs.operator in ('<<', '>>', '**'):
+                    new_shape = None
+
+                    # TODO: This can be uncommented to reduce some logic
+                    # op0, op1 = rhs.operands
+                    # if isinstance(op1, ast.Const):
+                    #     if rhs.operator == '<<':
+                    #         return self._process_rhs(ast.Cat(ast.Const(0, op1.value), op0), shape)
+                    #     elif rhs.operator == '>>':
+                    #         return self._process_rhs(ast.Slice(op0, op1.value, len(op0)), shape)
+                elif shapes[0].signed == shapes[1].signed:
                     new_shape = ast.Shape(max(
                         shapes[0].width,
                         shapes[1].width,
