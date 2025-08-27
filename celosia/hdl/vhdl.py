@@ -222,6 +222,9 @@ end rtl;
                 width = max(width, value.width)
                 value = value.value
 
+            if value < 0:
+                value += 2**width
+
             binary_reset = format(value, f'0{width}b')
             b0 = binary_reset[0]
 
