@@ -402,9 +402,9 @@ end rtl;
             ret = 'false' if condition.value == 0 else 'true'
 
         else:
-            ret = str(self._parse_rhs(condition, allow_signed=False, force_bool=True))
             if isinstance(condition, ast.Signal):
-                ret = f'{ret}(0)'
+                condition = condition[0]
+            ret = str(self._parse_rhs(condition, allow_signed=False, force_bool=True))
 
         return ret
 
