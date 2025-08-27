@@ -153,7 +153,7 @@ class Module:
             stop_idx = len(lhs)
 
         if isinstance(lhs, (ast.Const, ast.Operator)):
-            raise RuntimeError("Invalid LHS:", lhs)
+            raise RuntimeError(f"Invalid LHS: {lhs}")
         elif isinstance(lhs, ast.Signal):
             res.append((lhs, celosia_statement.Assign(rhs, start_idx, stop_idx)))
         elif isinstance(lhs, ast.Cat):
@@ -228,7 +228,7 @@ class Module:
             res.extend(self._open_switch(lhs.index, cases))
 
         else:
-            raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
+            raise ValueError(f"Unknown RHS object detected: {rhs.__class__.__name__}")
 
         return res
 
@@ -420,7 +420,7 @@ class Module:
                 self._add_new_statement(new_rhs, celosia_statement.Switch(index, cases))
                 rhs = new_rhs
         else:
-            raise ValueError("Unknown RHS object detected: {}".format(rhs.__class__.__name__))
+            raise ValueError(f"Unknown RHS object detected: {rhs.__class__.__name__}")
 
         return rhs
 
@@ -508,7 +508,7 @@ class Module:
             for st in statement:
                 res.extend(self._process_statement(st))
         else:
-            raise ValueError("Unknown statement: {}".format(statement.__class__.__name__))
+            raise ValueError(f"Unknown statement: {statement.__class__.__name__}")
 
         return res
 

@@ -611,7 +611,7 @@ end rtl;
             index = f'to_integer({self._parse_rhs(rhs.index)}'
             rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}({index})))'
         else:
-            raise ValueError("Unknown RHS object detected: {}".format(rhs))
+            raise ValueError(f"Unknown RHS object detected: {rhs}")
 
         return rhs
 

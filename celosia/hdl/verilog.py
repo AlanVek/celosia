@@ -392,7 +392,7 @@ endmodule
         elif isinstance(rhs, celosia_signal.MemoryPort):
             rhs = f'{self._parse_rhs(rhs.signal)}[{self._parse_rhs(rhs.index)}]'
         else:
-            raise ValueError("Unknown RHS object detected: {}".format(rhs))
+            raise ValueError(f"Unknown RHS object detected: {rhs}")
 
         return rhs
 
