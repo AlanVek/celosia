@@ -684,7 +684,7 @@ end rtl;
         return rhs
 
     def _parse_binary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
-        as_op = rhs.operator not in ('<<', '>>')
+        as_op = rhs.operator not in ('<<', '>>', '&', '^', '|')
         parsed = tuple(self._parse_rhs(op, operation=as_op) for op in rhs.operands)
         p0, p1 = parsed
 
@@ -693,7 +693,9 @@ end rtl;
             if rhs.operator != '*' and any(len(operand) < size for operand in rhs.operands):
                 p0, p1 = (f'resize({p}, {size})' for p in parsed)
 
-            rhs = f'std_logic_vector({p0} {self._operator_remap(rhs.operator)} {p1})'
+            rhs = f'{p0} {self._operator_remap(rhs.operator)} {p1}'
+            if as_op:
+                rhs = f'std_logic_vector({rhs})'
 
         elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
             rhs = f'{p0} {self._operator_remap(rhs.operator)} {p1}'
