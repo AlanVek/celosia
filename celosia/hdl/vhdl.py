@@ -411,11 +411,11 @@ end rtl;
                 if isinstance(case.test, ast.Signal):
                     idx = lambda x: f'{x}(0)'
 
-                test = str(self._parse_rhs(case.test, allow_bool=True))
+                test = str(self._parse_rhs(case.test, force_bool=True))
 
                 # FIX: If '0'/'1' not allowed apparently
                 for possible_value in [0, 1]:
-                    if test == self._parse_rhs(ast.Const(possible_value, 1)[0], allow_bool=True):
+                    if test == self._parse_rhs(ast.Const(possible_value, 1)[0], force_bool=True):
                         test = f"std_logic'('{possible_value}') = std_logic'('1')"
                         idx = lambda x: x
                         break
@@ -525,7 +525,14 @@ end rtl;
         #     ''
         # ))
 
-    def _parse_rhs(self, rhs: Union[ast.Value, int, str, celosia_signal.MemoryPort], size: int = None, allow_signed: bool = True, allow_bool: bool = False, operation: bool = False):
+    def _parse_rhs(
+        self,
+        rhs: Union[ast.Value, int, str, celosia_signal.MemoryPort],
+        size: int = None,
+        allow_signed: bool = True,
+        force_bool: bool = False,
+        operation: bool = False,
+    ) -> Union[str, int]:
         if isinstance(rhs, celosia_signal.MemoryPort):
             size = len(rhs.signal)
 
@@ -547,12 +554,7 @@ end rtl;
                 value = format(value, f'0{width//4}x')
                 value = f'x"{value}"'
 
-            if signed:
-                fn = 'signed'
-            else:
-                fn = 'unsigned'
-
-            rhs = f"{fn}(std_logic_vector'({value}))"
+            rhs = f"{self._sign_fn(signed)}(std_logic_vector'({value}))"
 
             if not operation:
                 rhs = f'std_logic_vector({rhs})'
@@ -580,117 +582,23 @@ end rtl;
                 rhs = f'{rhs}({size-1} downto 0)'
 
             if operation:
-                if signed:
-                    rhs = f'signed({rhs})'
-                else:
-                    rhs = f'unsigned({rhs})'
+                rhs = f'{self._sign_fn(signed)}({rhs})'
 
         elif isinstance(rhs, ast.Cat):
             rhs = f"{' & '.join(self._parse_rhs(part) for part in rhs.parts[::-1])}"
+
         elif isinstance(rhs, ast.Slice):
-            if (rhs.start == 0 and rhs.stop >= len(rhs.value)) and not allow_bool:
+            if (rhs.start == 0 and rhs.stop >= len(rhs.value)) and not force_bool:
                 rhs = self._parse_rhs(rhs.value)
             else:
-                if allow_bool and (rhs.stop == rhs.start + 1):
+                if force_bool and (rhs.stop == rhs.start + 1):
                     idx = rhs.start
                 else:
                     idx = f'{rhs.stop-1} downto {rhs.start}'
                 rhs = f"{self._parse_rhs(rhs.value, allow_signed=False)}({idx})"
 
         elif isinstance(rhs, ast.Operator):
-            allow_signed = rhs.operator != 'u'
-            operation = len(rhs.operands) > 1 and rhs.operator in (
-                '+', '-', '*', '//', '%', '<', '<=', '==', '!=', '>', '>=',
-            )
-            parsed = list(map(lambda x: self._parse_rhs(x, allow_signed=allow_signed, operation=operation), rhs.operands))
-            if len(rhs.operands) == 1:
-                p0 = parsed[0]
-                if rhs.operator == '+':
-                    rhs = p0
-                elif rhs.operator == '~':
-                    rhs = f'not {p0}'
-                elif rhs.operator == '-':
-                    new_rhs = f'-signed({p0})'
-
-                    # FIX: -signal has +1 bit for Amaranth, but not for VHDL
-                    if len(rhs.operands[0]) < size:
-                        new_rhs = f'resize({new_rhs}, {size})'
-                    rhs = f'std_logic_vector({new_rhs})'
-
-                elif rhs.operator == 'b':
-                    if allow_bool:
-                        rhs = f'{p0} /= {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
-                    else:
-                        rhs = f'"0" when {p0} = {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))} else "1"'
-                elif rhs.operator in ('r|', 'r&', 'r^'):
-                    if len(rhs.operands[0]) == 1:
-                        rhs = str(p0)
-                    else:
-                        operator = rhs.operator[-1].replace("|", "or").replace('&', 'and').replace('^', 'xor') + ' '
-                        rhs = f"(0=>{operator}{p0}, others=>'0')"
-
-                elif rhs.operator == "u":
-                    rhs = p0
-                elif rhs.operator == "s":
-                    if rhs.operands[0].shape().signed:
-                        rhs = p0
-                    else:
-                        rhs = f'signed({p0})'
-                        if not operation:
-                            rhs = f'std_logic_vector({rhs})'
-                else:
-                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
-
-            elif len(rhs.operands) == 2:
-                p0, p1 = parsed
-
-                if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
-                    operator = rhs.operator[0].replace("|", "or").replace('&', 'and').replace('^', 'xor').replace('%', 'rem')
-
-                    if rhs.operator in ('+', '-', '//', '%') and any(len(operand) < size for operand in rhs.operands):
-                        p0, p1 = (f'resize({p}, {size})' for p in parsed)
-
-                    rhs = f'std_logic_vector({p0} {operator} {p1})'
-
-                elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
-                    operator = rhs.operator.replace('==', '=').replace('!=', '/=')
-                    rhs = f'{p0} {operator} {p1}'
-                    if not allow_bool:
-                        rhs = f'"1" when {rhs} else "0"'
-                elif rhs.operator in ('<<', '>>'):
-                    offset = f'to_integer({self._parse_rhs(rhs.operands[1])})'
-
-                    # if len(rhs.operands[0]) < size:
-                    #     p0 = f'resize({p0}, {size})'
-
-                    if rhs.operator == '>>':
-                        fn = 'shift_right'
-                    else:
-                        fn = 'shift_left'
-                    rhs = f'{fn}({p0}, {offset})'
-                else:
-                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
-            elif len(rhs.operands) == 3:
-                p0, p1, p2 = parsed
-                if rhs.operator == "m":
-                    if any(len(operand) > size for operand in rhs.operands[1:]):
-                        p1 = f'{p1}({size-1} downto 0)'
-                        p2 = f'{p2}({size-1} downto 0)'
-
-                    if isinstance(rhs.operands[0], ast.Const):
-                        if rhs.operands[0].value == 0:
-                            rhs = str(p2)
-                        else:
-                            rhs = str(p1)
-                    else:
-                        idx = lambda x: x
-                        if not isinstance(rhs.operands[0], ast.Operator):
-                            idx = lambda x: f'{x}(0)'
-                        rhs = f'{p1} when {idx(p0)} else {p2}'
-                else:
-                    raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
-            else:
-                raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+            rhs = self._parse_op(rhs, size=size, force_bool=force_bool, operation=operation)
 
         elif isinstance(rhs, ast.Part):
             if rhs.stride != 1:
@@ -704,6 +612,129 @@ end rtl;
 
         return rhs
 
+    @staticmethod
+    def _operator_remap(operator: str) -> str:
+        remap = {
+            '|': 'or', '&': 'and', '^': 'xor', '%': 'rem', '//': '/',
+            '==': '=', '!=': '/=',
+        }
+        if operator.startswith('r'):
+            operator = operator[1:]
+
+        for old, new in remap.items():
+            if operator == old:
+                return new
+
+        return operator
+
+    @staticmethod
+    def _sign_fn(signed: bool) -> str:
+        return 'signed' if signed else 'unsigned'
+
+    def _parse_op(self, rhs: ast.Operator, **kwargs) -> Union[int, str]:
+        if len(rhs.operands) == 1:
+            fn = self._parse_unary_op
+        elif len(rhs.operands) == 2:
+            fn = self._parse_binary_op
+        elif len(rhs.operands) == 3:
+            fn = self._parse_ternary_op
+        else:
+            raise RuntimeError(f"Invalid number of operands: {len(rhs.operands)}")
+
+        return fn(rhs, **kwargs)
+
+    def _parse_unary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
+        allow_signed = rhs.operator not in ('u', 's')
+        parsed = tuple(self._parse_rhs(op, allow_signed=allow_signed) for op in rhs.operands)
+        p0, = parsed
+
+        if rhs.operator == '+':
+            rhs = p0
+
+        elif rhs.operator == '~':
+            rhs = f'not {p0}'
+
+        elif rhs.operator == '-':
+            new_rhs = f'-{self._sign_fn(True)}({p0})'
+
+            # FIX: -signal has +1 bit for Amaranth, but not for VHDL
+            if len(rhs.operands[0]) < size:
+                new_rhs = f'resize({new_rhs}, {size})'
+            rhs = f'std_logic_vector({new_rhs})'
+
+        elif rhs.operator == 'b':
+            if force_bool:
+                rhs = f'or {p0}'
+            else:
+                rhs = f'"0" when {p0} = {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))} else "1"'
+
+        elif rhs.operator in ('r|', 'r&', 'r^'):
+            if len(rhs.operands[0]) == 1:
+                rhs = str(p0)
+            else:
+                rhs = f"(0=>{self._operator_remap(rhs.operator)} {p0}, others=>'0')"
+
+        elif rhs.operator in ('u', 's'):
+            rhs = f'{self._sign_fn(rhs.operator == "s")}({p0})'
+            if not operation:
+                rhs = f'std_logic_vector({rhs})'
+        else:
+            raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
+        return rhs
+
+    def _parse_binary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
+        as_op = rhs.operator not in ('<<', '>>')
+        parsed = tuple(self._parse_rhs(op, operation=as_op) for op in rhs.operands)
+        p0, p1 = parsed
+
+        if rhs.operator in ('+', '-', '*', '//', '%', '&', '^', '|'):
+            # Fix: Multiplication increases VHDL size, others don't
+            if rhs.operator != '*' and any(len(operand) < size for operand in rhs.operands):
+                p0, p1 = (f'resize({p}, {size})' for p in parsed)
+
+            rhs = f'std_logic_vector({p0} {self._operator_remap(rhs.operator)} {p1})'
+
+        elif rhs.operator in ('<', '<=', '==', '!=', '>', '>='):
+            rhs = f'{p0} {self._operator_remap(rhs.operator)} {p1}'
+            if not force_bool:
+                rhs = f'"1" when {rhs} else "0"'
+
+        elif rhs.operator in ('<<', '>>'):
+            offset = f'to_integer({p1})'
+
+            if len(rhs.operands[0]) < size:
+                p0 = f'resize({p0}, {size})'
+
+            fn = f'shift_{"right" if rhs.operator == ">>" else "left"}'
+            rhs = f'{fn}({p0}, {offset})'
+
+        else:
+            raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
+        return rhs
+
+    def _parse_ternary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
+        parsed = tuple(self._parse_rhs(op, allow_signed=(i!=0), force_bool=(i==0)) for i, op in enumerate(rhs.operands))
+        p0, p1, p2 = parsed
+
+        if rhs.operator == "m":
+            if any(len(operand) > size for operand in rhs.operands[1:]):
+                p1 = f'{p1}({size-1} downto 0)'
+                p2 = f'{p2}({size-1} downto 0)'
+
+            if isinstance(rhs.operands[0], ast.Const):
+                if rhs.operands[0].value == 0:
+                    rhs = str(p2)
+                else:
+                    rhs = str(p1)
+            else:
+                idx = '(0)' if isinstance(rhs.operands[0], ast.Signal) else ''
+                rhs = f'{p1} when {p0}{idx} else {p2}'
+        else:
+            raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
+
+        return rhs
 
 def convert(
     module: Union[ir.Fragment, ir.Elaboratable],
