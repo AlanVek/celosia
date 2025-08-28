@@ -360,9 +360,10 @@ class Module:
                 if len(sel) != 1:
                     sel = sel.bool()
 
+                new_shape = rhs.shape()
                 rhs.operands = [
                     self._process_rhs(sel, **kwargs),
-                    *[self._process_rhs(op, rhs.shape(), **kwargs) for op in rhs.operands[1:]],
+                    *[self._process_rhs(op, new_shape, **kwargs) for op in rhs.operands[1:]],
                 ]
 
             else:
@@ -677,6 +678,16 @@ class MemoryModule(Module):
             ]
 
     class ReadPort(Port):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._statements = []
+
+        @property
+        def statements(self):
+            if self.domain is None:
+                raise RuntimeError("Combinational read ports don't have statements")
+            return self._statements
+
         @classmethod
         def from_fragment(cls, fragment: ir.Instance, domain_resolver) -> list["MemoryModule.ReadPort"]:
             return super().from_fragment(fragment, 'RD', domain_resolver)
@@ -733,10 +744,12 @@ class MemoryModule(Module):
 
 
         for rport in self._r_ports:
-            self.signals[rport.data].domain = rport.domain
-            rport.proxy = celosia_signal.MemoryPort(self._mem.signal, memory = self._mem, index = rport.index)
+            self.signals[rport.data].domain = None
+            read_port = celosia_signal.MemoryPort(self._mem.signal, memory = self._mem, index = rport.index)
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
+                rport.proxy = read_port
+
                 enables = []
                 if isinstance(rport.enable, ast.Cat):
                     enables.extend(rport.enable.parts)
@@ -749,6 +762,10 @@ class MemoryModule(Module):
 
                 for enable in enables:
                     self.signals.pop(enable, None)
+
+            else:
+                rport.proxy = self._new_signal(shape = self._width, prefix = '_0_', domain = rport.domain)
+                rport.statements.append(celosia_statement.Assign(read_port))
 
         for wport in self._w_ports:
             wport.proxy = self._new_signal(
@@ -763,13 +780,24 @@ class MemoryModule(Module):
 
         self._update_statements(self.fragment.statements)
 
+    def _prepare_statements(self):
+        ret = super()._prepare_statements()
+
+        for rport in self._r_ports:
+            if rport.domain is not None:
+                self._add_new_statement(rport.proxy, celosia_statement.Switch(rport.enable, {
+                    '1': rport.statements,
+                }))
+
+        return ret
+
     def _reset(self):
         super()._reset()
         self._arr.clear()
 
     def _set_arr(self, arr: ast.ArrayProxy) -> tuple[int, ...]:
         elems = []
-        slices = ()
+        slices = None
         is_slice = None
 
         for signal in arr.elems:
@@ -781,7 +809,7 @@ class MemoryModule(Module):
                     raise RuntimeError(f"Can't mix slice/signal in same array for memory {self.name}")
 
                 new_slice = (signal.start, signal.stop)
-                if not slices:
+                if slices is None:
                     slices = new_slice
 
                 if slices != new_slice:
@@ -806,7 +834,7 @@ class MemoryModule(Module):
             elems.append(signal)
 
         self._arr.update(elems)
-        return slices
+        return slices if slices is not None else (None, None)
 
     def _process_rhs(self, rhs: ast.Value, shape: Union[int, ast.Shape] = None, **kwargs) -> ast.Value:
         if isinstance(rhs, ast.ArrayProxy):
@@ -817,6 +845,25 @@ class MemoryModule(Module):
                     return rport.proxy
 
             raise RuntimeError(f"Port read index not found for memory {self.name}")
+
+        elif isinstance(rhs, ast.Operator) and rhs.operator == 'm' and len(rhs.operands) == 3:
+            # FIX: Replace 'mux' with 'if' for transparent=True so we can read memory only once
+
+            if not isinstance(rhs.operands[2], ast.ArrayProxy):
+                raise RuntimeError(f"Unexpected mux assignment in memory {self.name}")
+
+            test = self._process_rhs(rhs.operands[0])
+            proxy = self._process_rhs(rhs.operands[2])
+            slices = self._set_arr(rhs.operands[2])
+
+            new_statement = celosia_statement.Switch(test, {
+                '1': [celosia_statement.Assign(self._process_rhs(rhs.operands[1]), *slices)],
+            })
+            for rport in self._r_ports:
+                if rport.proxy is proxy:
+                    rport.statements.append(new_statement)
+
+            return proxy[slice(*slices)]
 
         if self._mem.signal in rhs._rhs_signals():
             return rhs
@@ -846,7 +893,7 @@ class MemoryModule(Module):
                 continue
 
             if any(
-                st.test is rport.enable and rport.domain is None for rport in self._r_ports
+                st.test is rport.enable for rport in self._r_ports
             ):
                 assert [('1',)] == list(st.cases), f"Invalid memory statement for module {self.name}"
                 replace_statements[i] = ast._StatementList(st.cases[('1',)])
