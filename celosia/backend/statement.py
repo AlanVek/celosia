@@ -30,7 +30,7 @@ class Switch(Statement):
 
     def __init__(self, test: ast.Value, cases: dict[Union[int, str, tuple], list[Statement]]):
         self.test = test
-        self.cases = self.process_cases(test, cases)
+        self.cases = self.process_cases(cases)
 
         # Move default to last place
         default = self.cases.pop(None, None)
@@ -60,37 +60,36 @@ class Switch(Statement):
         for pop in pops:
             self.cases.pop(pop)
 
-    @classmethod
-    def convert_case(cls, test: ast.Value, case: Union[int, str, tuple]) -> list[str]:
+    def convert_case(self, case: Union[int, str, tuple]) -> list[str]:
         ret = []
         if isinstance(case, tuple):
             if len(case) == 0:
-                case = ret.append(None)
-            else:
-                for c in case:
-                    ret.extend(Switch.convert_case(test, c))
+                case = (None,)
+            for c in case:
+                ret.extend(self.convert_case(c))
         elif isinstance(case, str):
             ret.append(case.replace('-', '?').replace(' ', ''))
         elif isinstance(case, int):
-            ret.extend(cls.convert_case(test, format(case, f'0{len(test)}b')))
+            ret.extend(self.convert_case(format(case, f'0{len(self.test)}b')))
+        elif case is None:
+            ret.append(case)
         else:
             raise RuntimeError(f"Unknown switch case: {case}")
 
         return ret
 
-    @classmethod
-    def process_cases(cls, test: ast.Value, cases: dict) -> dict[str, list[Statement]]:
+    def process_cases(self, cases: dict) -> dict[str, list[Statement]]:
         ret = {}
 
         for case, statements in cases.items():
-            new_cases = cls.convert_case(test, case)
+            new_cases = self.convert_case(case)
 
             for c in new_cases:
                 ret[c] = statements
 
         return ret
 
-    def _as_if(self) -> list[Union[If, Else]]:
+    def _as_if(self) -> list[Case]:
         res = []
 
         for case, statements in self.cases.items():
