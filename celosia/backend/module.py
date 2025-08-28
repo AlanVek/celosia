@@ -721,7 +721,7 @@ class MemoryModule(Module):
     def _prepare_signals(self):
         super()._prepare_signals()
 
-        # TODO: Handle granularity!!!
+        # TODO: Fix for granularity, memory should be read only once and in the correct domain
 
         self._mem = self.signals[self._new_signal(
             shape   = self._width,
@@ -737,7 +737,18 @@ class MemoryModule(Module):
             rport.proxy = celosia_signal.MemoryPort(self._mem.signal, memory = self._mem, index = rport.index)
 
             if rport.domain is None:  # TODO: Also here if r_en is never assigned by parent module
-                self.signals.pop(rport.enable, None)
+                enables = []
+                if isinstance(rport.enable, ast.Cat):
+                    enables.extend(rport.enable.parts)
+                elif isinstance(rport.enable, ast.Signal):
+                    enables.append(rport.enable)
+                elif isinstance(rport.enable, ast.Const):
+                    pass
+                else:
+                    raise RuntimeError(f"Unknown read enable for memory {self.name}: {rport.enable}")
+
+                for enable in enables:
+                    self.signals.pop(enable, None)
 
         for wport in self._w_ports:
             wport.proxy = self._new_signal(
@@ -756,11 +767,46 @@ class MemoryModule(Module):
         super()._reset()
         self._arr.clear()
 
-    def _set_arr(self, arr: ast.ArrayProxy):
-        for signal in arr.elems:
-            self.signals.pop(signal, None)
+    def _set_arr(self, arr: ast.ArrayProxy) -> tuple[int, ...]:
+        elems = []
+        slices = ()
+        is_slice = None
 
-        self._arr.update(arr.elems)
+        for signal in arr.elems:
+            if isinstance(signal, ast.Slice):
+                if is_slice is None:
+                    is_slice = True
+
+                if not is_slice:
+                    raise RuntimeError(f"Can't mix slice/signal in same array for memory {self.name}")
+
+                new_slice = (signal.start, signal.stop)
+                if not slices:
+                    slices = new_slice
+
+                if slices != new_slice:
+                    raise RuntimeError(f"Unexpected asignment for memory {self.name}, all array slices should be equal")
+
+                if not isinstance(signal.value, ast.Signal):
+                    raise RuntimeError(f"Invalid array element for memory {self.name}: {signal}")
+
+                signal = signal.value
+
+            elif isinstance(signal, ast.Signal):
+                if is_slice is None:
+                    is_slice = False
+
+                if is_slice:
+                    raise RuntimeError(f"Can't mix slice/signal in same array for memory {self.name}")
+
+            else:
+                raise RuntimeError(f"Invalid array element for memory {self.name}: {signal}")
+
+            self.signals.pop(signal, None)
+            elems.append(signal)
+
+        self._arr.update(elems)
+        return slices
 
     def _process_rhs(self, rhs: ast.Value, shape: Union[int, ast.Shape] = None, **kwargs) -> ast.Value:
         if isinstance(rhs, ast.ArrayProxy):
@@ -779,11 +825,11 @@ class MemoryModule(Module):
 
     def _process_lhs(self, lhs: ast.Value, rhs: ast.Value, start_idx: int = None, stop_idx: int = None) -> list[tuple[ast.Signal, ast.Value]]:
         if isinstance(lhs, ast.ArrayProxy):
-            self._set_arr(lhs)
+            slices = self._set_arr(lhs)
 
             for wport in self._w_ports:
                 if lhs.index is wport.index:
-                    return [(wport.proxy, celosia_statement.Assign(rhs))]
+                    return [(wport.proxy, celosia_statement.Assign(rhs, *slices))]
 
             raise RuntimeError(f"Port write index not found for memory {self.name}")
 
