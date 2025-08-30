@@ -7,12 +7,20 @@ from typing import Union
 import importlib
 import pkgutil
 
-class HDL:
+class HDLExtensions(type):
+    extensions: list[str] = []
+
+    @property
+    def default_extension(self) -> str:
+        if not self.extensions:
+            raise RuntimeError(f"No extensions defined for {self.__class__.__name__}")
+        return self.extensions[0]
+
+class HDL(metaclass=HDLExtensions):
     case_sensitive = False
     portsep = ','
     top_first = True
 
-    extensions: list[str] = []
     open_comment = ''
     close_comment = ''
 
@@ -32,9 +40,7 @@ class HDL:
 
     @property
     def default_extension(self) -> str:
-        if not self.extensions:
-            raise RuntimeError(f"No extensions defined for {self.__class__.__name__}")
-        return self.extensions[0]
+        return type(self).default_extension
 
     def sanitize(self, name: str) -> str:
         return name
