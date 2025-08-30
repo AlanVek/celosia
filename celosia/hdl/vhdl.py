@@ -551,16 +551,15 @@ end rtl;
             width = max(size, rhs.width)
 
             if value < 0:
-                value += 2**width
+                value += 2**rhs.width
 
             if width % 4:
-                value = format(value, f'0{width}b')
-                value = f'"{value}"'
+                base = 'b'
             else:
-                value = format(value, f'0{width//4}x')
-                value = f'x"{value}"'
+                base = 'x'
+                width //= 4
 
-            rhs = f"{self._sign_fn(signed)}(std_logic_vector'({value}))"
+            rhs = f"{self._sign_fn(signed)}'({base}\"{format(value, f'0{width}{base}')}\")"
 
             if not operation:
                 rhs = f'std_logic_vector({rhs})'
