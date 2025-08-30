@@ -38,7 +38,7 @@ def main():
     hdl_mappings = []
     for name, HDLType in lang_map.items():
         hdl_mappings.append(
-            (HDLType().convert, f'.{HDLType.extension}', getattr(args, name))
+            (HDLType().convert, f'.{HDLType.default_extension}', getattr(args, name))
         )
 
     for file in input_files:

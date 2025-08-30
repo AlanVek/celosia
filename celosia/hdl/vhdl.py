@@ -52,7 +52,7 @@ begin{submodules}{blocks}{assignments}
 end rtl;
 """
 
-    extension = 'vhd'
+    extensions = ['vhd', 'vhdl']
     open_comment = '-- '
 
     def __init__(self, spaces: int = 4, blackboxes: list[dict[str, Union[int, str, tuple]]] = None):

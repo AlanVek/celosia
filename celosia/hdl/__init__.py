@@ -12,7 +12,7 @@ class HDL:
     portsep = ','
     top_first = True
 
-    extension = ''
+    extensions: list[str] = []
     open_comment = ''
     close_comment = ''
 
@@ -29,6 +29,12 @@ class HDL:
         self.invalid_names: set[str] = set()
         self.name_map: dict[ast.SignalDict, tuple[str, ...]] = ast.SignalDict()
         self.hierarchy: tuple[str, ...] = ()
+
+    @property
+    def default_extension(self) -> str:
+        if not self.extensions:
+            raise RuntimeError(f"No extensions defined for {self.__class__.__name__}")
+        return self.extensions[0]
 
     def sanitize(self, name: str) -> str:
         return name

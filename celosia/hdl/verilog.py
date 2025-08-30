@@ -43,7 +43,7 @@ class Verilog(HDL):
 endmodule
 """
 
-    extension = 'v'
+    extensions = ['v']
     open_comment = '/* '
     close_comment = ' */'
 
