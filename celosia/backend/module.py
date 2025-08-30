@@ -260,21 +260,20 @@ class Module:
 
         # TODO: Possibly receive a "top" parameter, so that the first layer doesn't need to create a new signal
         # For example: assign x = Cat(Slice, Part) ---> x = Cat(new_slice, new_part) instead of x = new_signal_for_cat
+        curr_shape: ast.Shape = rhs.shape()
 
         if shape is None:
-            shape: ast.Shape = rhs.shape()
+            shape = curr_shape
 
         shape: ast.Shape = ast.Shape.cast(shape)
 
         if ignore_sign:
-            shape.signed = rhs.shape().signed
+            shape.signed = curr_shape.signed
 
         io = kwargs.get('io', False)
 
         if isinstance(rhs, ast.Const):
             return ast.Const(rhs.value, shape)
-
-        curr_shape: ast.Shape = rhs.shape()
 
         if curr_shape.width > shape.width:
             return self._process_rhs(ast.Slice(rhs, 0, shape.width), shape, **kwargs)
