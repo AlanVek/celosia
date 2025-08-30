@@ -313,6 +313,9 @@ class HDL(metaclass=HDLExtensions):
     def _parse_rhs(self, rhs: Any):
         raise ValueError(f"Unknown RHS object detected: {rhs} (type {type(rhs)})")
 
+    def _parse_attribute(self, key: str, value: Any) -> str:
+        return str(self._parse_parameter(value))
+
     @classmethod
     def _escape_string(cls, string: str) -> str:
         return string

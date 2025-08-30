@@ -129,7 +129,7 @@ endmodule
         for key, value in mapping.attrs.items():
             if isinstance(value, int):
                 value = ast.Const(value, max(32, value.bit_length()))
-            res += f'(* {key} = {self._parse_rhs(value, allow_signed=False)} *)\n'
+            res += f'(* {key} = {self._parse_attribute(key, value)} *)\n'
 
         res += f'{dir}{type} {self._generate_signal(mapping)}'
         if reset is not None:
