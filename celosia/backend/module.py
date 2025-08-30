@@ -142,7 +142,7 @@ class Module:
         else:
             return rhs[start : stop]
 
-    def _process_lhs(self, lhs: ast.Value, rhs: ast.Value, start_idx: int = None, stop_idx: int = None) -> list[tuple]:
+    def _process_lhs(self, lhs: ast.Value, rhs: ast.Value, start_idx: int = None, stop_idx: int = None) -> list[tuple[ast.Signal, celosia_statement.Statement]]:
         res: list[tuple] = []
 
         # TODO: Review start_idx/stop_idx, maybe it's better to use intermediate signals!
@@ -152,8 +152,8 @@ class Module:
         if stop_idx is None or stop_idx > len(lhs):
             stop_idx = len(lhs)
 
-        if isinstance(lhs, (ast.Const, ast.Operator)):
-            raise RuntimeError(f"Invalid LHS: {lhs}")
+        if isinstance(lhs, ast.Const):
+            raise RuntimeError(f"Invalid LHS, can't be const: {lhs}")
         elif isinstance(lhs, ast.Signal):
             res.append((lhs, celosia_statement.Assign(rhs, start_idx, stop_idx)))
         elif isinstance(lhs, ast.Cat):
@@ -193,6 +193,12 @@ class Module:
             if lhs.start < lhs.stop:
                 start = start_idx+lhs.start
                 res.extend(self._process_lhs(lhs.value, rhs, start_idx=start, stop_idx=min(start+stop_idx, lhs.stop)))
+
+        elif isinstance(lhs, ast.Operator):
+            if len(lhs.operands) == 1 and lhs.operator in ('u', 's'):
+                res.extend(self._process_lhs(lhs.operands[0], rhs, start_idx=start_idx, stop_idx=stop_idx))
+            else:
+                raise RuntimeError(f"Invalid LHS, can't be operator: {lhs}")
 
         elif isinstance(lhs, ast.Part):
             if isinstance(lhs.offset, ast.Const):
@@ -248,7 +254,7 @@ class Module:
 
         concat.parts = new_parts
 
-    def _process_rhs(self, rhs: ast.Value, shape: Union[int, ast.Shape] = None, **kwargs) -> ast.Value:
+    def _process_rhs(self, rhs: ast.Value, shape: Union[int, ast.Shape] = None, ignore_sign=False, **kwargs) -> ast.Value:
         # TODO: Possibly check if return value differs input value to determine whether a new signal is needed
         # so we can reduce code size
 
@@ -259,6 +265,9 @@ class Module:
             shape: ast.Shape = rhs.shape()
 
         shape: ast.Shape = ast.Shape.cast(shape)
+
+        if ignore_sign:
+            shape.signed = rhs.shape().signed
 
         io = kwargs.get('io', False)
 
@@ -453,7 +462,7 @@ class Module:
 
         return self._process_rhs(ast.Mux(divisor == 0, 0, rhs_div), **kwargs)
 
-    def _open_switch(self, test: ast.Value, cases: dict) -> list[tuple[ast.Signal, celosia_statement.Switch]]:
+    def _open_switch(self, test: ast.Value, cases: dict) -> list[tuple[ast.Signal, celosia_statement.Statement]]:
         res = []
         per_signal = ast.SignalDict()
 
@@ -485,11 +494,10 @@ class Module:
 
         return res
 
-    def _process_assign(self, assign: ast.Assign):
-        # TODO: Is upsize allowed here?
-        return self._process_lhs(assign.lhs, self._process_rhs(assign.rhs, assign.lhs.shape()))
+    def _process_assign(self, assign: ast.Assign) -> list[tuple[ast.Signal, celosia_statement.Statement]]:
+        return self._process_lhs(assign.lhs, self._process_rhs(assign.rhs, assign.lhs.shape(), ignore_sign=True))
 
-    def _process_switch(self, switch: ast.Switch):
+    def _process_switch(self, switch: ast.Switch) -> list[tuple[ast.Signal, celosia_statement.Statement]]:
         cases = {}
         for case, statements in switch.cases.items():
             for statement in statements:
@@ -497,7 +505,7 @@ class Module:
 
         return self._open_switch(switch.test, cases)
 
-    def _process_statement(self, statement: ast.Statement):
+    def _process_statement(self, statement: ast.Statement) -> list[tuple[ast.Signal, celosia_statement.Statement]]:
         res = []
         if isinstance(statement, ast.Assign):
             res.extend(self._process_assign(statement))
