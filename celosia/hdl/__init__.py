@@ -3,7 +3,7 @@ import celosia.backend.signal as celosia_signal
 import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
 from amaranth.hdl import ast, ir
-from typing import Union
+from typing import Union, Any
 import importlib
 import pkgutil
 
@@ -298,6 +298,24 @@ class HDL(metaclass=HDLExtensions):
             return ''
 
         return ' ' * (self.spaces * n)
+
+    def _parse_parameter(self, parameter: Any):
+        if isinstance(parameter, int):
+            parameter = self._parse_parameter(ast.Const(parameter, parameter.bit_length()))
+        elif isinstance(parameter, float):
+            pass
+        elif isinstance(parameter, str):
+            parameter = f'"{self._escape_string(parameter)}"'
+        else:
+            raise ValueError(f"Unknown parameter object detected: {parameter} (type {type(parameter)})")
+        return parameter
+
+    def _parse_rhs(self, rhs: Any):
+        raise ValueError(f"Unknown RHS object detected: {rhs} (type {type(rhs)})")
+
+    @classmethod
+    def _escape_string(cls, string: str) -> str:
+        return string
 
 def get_lang_map() -> dict[str, type[HDL]]:
     lang_map: dict[str, type[HDL]] = {}

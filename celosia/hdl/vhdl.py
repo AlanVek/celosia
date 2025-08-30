@@ -477,10 +477,9 @@ end rtl;
         res = []
 
         if submodule.parameters:
-            # TODO: Check generics types
             res.append('\n'.join((
                 'generic map (',
-                indent(',\n'.join(f'{name} => {value}' for name, value in submodule.parameters.items()), self.tabs()),
+                indent(',\n'.join(f'{name} => {self._parse_parameter(value)}' for name, value in submodule.parameters.items()), self.tabs()),
                 ')'
             )))
 
@@ -564,13 +563,6 @@ end rtl;
             if not operation:
                 rhs = f'std_logic_vector({rhs})'
 
-        elif isinstance(rhs, int):
-            pass
-
-        elif isinstance(rhs, str):
-            rhs = rhs.replace('"', '""')
-            rhs = f'"{rhs}"'
-
         elif isinstance(rhs, ast.Signal):
             signed = allow_signed and rhs.shape().signed
             width = len(rhs)
@@ -613,7 +605,7 @@ end rtl;
             index = f'to_integer({self._parse_rhs(rhs.index)}'
             rhs = f'std_logic_vector({self._parse_rhs(rhs.signal)}({index})))'
         else:
-            raise ValueError(f"Unknown RHS object detected: {rhs}")
+            rhs = super()._parse_rhs(rhs)
 
         return rhs
 
@@ -736,6 +728,22 @@ end rtl;
             raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
         return rhs
+
+    @classmethod
+    def _escape_string(cls, string: str) -> str:
+        return super()._escape_string(string.replace('"', '""'))
+
+    def _parse_parameter(self, parameter: Any):
+        # TODO: This should be paired with blackboxes to avoid type mismatches
+
+        if isinstance(parameter, ast.Const):
+            if parameter.width < 32:
+                parameter = parameter.value
+            else:
+                parameter = self._parse_rhs(parameter)
+        else:
+            parameter = super()._parse_parameter(parameter)
+        return parameter
 
 def convert(
     module: Union[ir.Fragment, ir.Elaboratable],

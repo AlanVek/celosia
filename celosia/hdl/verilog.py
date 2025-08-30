@@ -4,7 +4,7 @@ import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
 from textwrap import indent
 from amaranth.hdl import ast, ir
-from typing import Union
+from typing import Union, Any
 
 class Verilog(HDL):
     case_sensitive = True
@@ -299,7 +299,7 @@ endmodule
         if submodule.parameters:
             res += ' #(\n'
             for key, value in submodule.parameters.items():
-                res += f'{self.tabs()}.{key}({self._parse_rhs(value)}),\n'   # TODO: Check types
+                res += f'{self.tabs()}.{key}({self._parse_parameter(value)}),\n'
             res = res[:-2] + '\n)'
 
         res += f' {submodule.name} (\n'
@@ -320,13 +320,6 @@ endmodule
             rhs = f"{max(1, rhs.width)}'h{hex(value)[2:]}"
             if signed:
                 rhs = f'$signed({rhs})'
-
-        elif isinstance(rhs, int):
-            pass
-
-        elif isinstance(rhs, str):
-            rhs = rhs.replace('"', '\\"')
-            rhs = f'"{rhs}"'
 
         elif isinstance(rhs, ast.Signal):
             signed = allow_signed and rhs.shape().signed
@@ -392,7 +385,7 @@ endmodule
         elif isinstance(rhs, celosia_signal.MemoryPort):
             rhs = f'{self._parse_rhs(rhs.signal)}[{self._parse_rhs(rhs.index)}]'
         else:
-            raise ValueError(f"Unknown RHS object detected: {rhs}")
+            rhs = super()._parse_rhs(rhs)
 
         return rhs
 
@@ -404,6 +397,16 @@ endmodule
             res = '<='
         return res
 
+    @classmethod
+    def _escape_string(cls, string: str) -> str:
+        return super()._escape_string(string.replace('"', '\\"'))
+
+    def _parse_parameter(self, parameter: Any):
+        if isinstance(parameter, ast.Const):
+            parameter = self._parse_rhs(parameter, allow_signed=False)
+        else:
+            parameter = super()._parse_parameter(parameter)
+        return parameter
 
 def convert(
     module: Union[ir.Fragment, ir.Elaboratable],
