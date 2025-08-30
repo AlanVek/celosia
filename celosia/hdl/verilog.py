@@ -127,8 +127,6 @@ endmodule
                 dir += ' '
 
         for key, value in mapping.attrs.items():
-            if isinstance(value, int):
-                value = ast.Const(value, max(32, value.bit_length()))
             res += f'(* {key} = {self._parse_attribute(key, value)} *)\n'
 
         res += f'{dir}{type} {self._generate_signal(mapping)}'
@@ -407,6 +405,11 @@ endmodule
         else:
             parameter = super()._parse_parameter(parameter)
         return parameter
+
+    def _parse_attribute(self, key: str, value: Any) -> str:
+        if isinstance(value, int):
+            value = ast.Const(value, max(32, value.bit_length()))
+        return super()._parse_attribute(key, value)
 
 def convert(
     module: Union[ir.Fragment, ir.Elaboratable],
