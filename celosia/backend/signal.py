@@ -1,8 +1,8 @@
 import celosia.backend.statement as celosia_statement
-from amaranth.hdl import ast, ir
+from amaranth.hdl import _ast, _nir, _ir, _cd
 
 class Signal:
-    def __init__(self, signal: ast.Signal, domain: ir.ClockDomain = None):
+    def __init__(self, signal: _ast.Signal, domain: _cd.ClockDomain = None):
         self.signal = signal
         self.domain = domain
         self.statements: list[celosia_statement.Statement] = []
@@ -41,7 +41,7 @@ class Signal:
         if all(assigned_bits):
             return None
 
-        return celosia_statement.Assign(ast.Const(self.signal.reset, len(self.signal)))
+        return celosia_statement.Assign(_ast.Const(self.signal.reset, len(self.signal)))
 
     def add_statement(self, statement):
         if not isinstance(statement, list):
@@ -84,7 +84,7 @@ class Signal:
         return self.signal.attrs
 
 class RemappedSignal(Signal):
-    def __init__(self, signal: ast.Signal, sync_signal: ast.Signal):
+    def __init__(self, signal: _ast.Signal, sync_signal: _ast.Signal):
         super().__init__(signal, domain=None)
         self.sync_signal = sync_signal
 
@@ -98,7 +98,7 @@ class RemappedSignal(Signal):
         return reset
 
 class Port(Signal):
-    def __init__(self, signal: ast.Signal, direction: str, domain: ir.ClockDomain = None):
+    def __init__(self, signal: _ast.Signal, direction: str, domain: _cd.ClockDomain = None):
         super().__init__(signal, domain)
         self.direction = direction
         self._alt_name: str = None
@@ -120,7 +120,7 @@ class Port(Signal):
         self.signal.name = value
 
 class Memory(Signal):
-    def __init__(self, signal: ast.Signal, init: list = None, attrs: dict = None):
+    def __init__(self, signal: _ast.Signal, init: list = None, attrs: dict = None):
         super().__init__(signal)
         self.init = [] if init is None else init
         self._attrs = {} if attrs is None else attrs
@@ -134,7 +134,7 @@ class Memory(Signal):
         return self._attrs
 
 class MemoryPort(Signal):
-    def __init__(self, signal: ast.Signal, memory: Memory, index: ast.Signal, domain: ir.ClockDomain = None):
+    def __init__(self, signal: _ast.Signal, memory: Memory, index: _ast.Signal, domain: _cd.ClockDomain = None):
         super().__init__(signal, domain)
         self.memory = memory
         self.index = index

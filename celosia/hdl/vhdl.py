@@ -3,7 +3,7 @@ import celosia.backend.signal as celosia_signal
 import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
 from textwrap import indent
-from amaranth.hdl import ast, ir
+from amaranth.hdl import _ast
 from typing import Union, Any
 
 class VHDL(HDL):
@@ -160,7 +160,7 @@ end rtl;
         for idx, description in types:
             self.signal_features['types'].append(f'type {self._typenames[idx]} is {description};')
 
-    def _generate_signal_from_string(self, name: str, width: Union[int, ast.Shape], dir: str = None, type=None) -> str:
+    def _generate_signal_from_string(self, name: str, width: Union[int, _ast.Shape], dir: str = None, type=None) -> str:
         # TODO: Check what to do with zero-width signals
         # if len(mapping.signal) <= 0:
         #     raise RuntimeError(f"Zero-width mapping {mapping.name} not allowed")
@@ -206,7 +206,7 @@ end rtl;
     def _generate_reset(self, values, width) -> str:
 
         depth = None
-        if isinstance(values, (int, ast.Const)):
+        if isinstance(values, (int, _ast.Const)):
             values = [values]
             depth = 0
         elif not isinstance(values, (list, tuple, set)):
@@ -218,7 +218,7 @@ end rtl;
         resets = []
 
         for value in values:
-            if isinstance(value, ast.Const):
+            if isinstance(value, _ast.Const):
                 width = max(width, value.width)
                 value = value.value
 
@@ -251,8 +251,8 @@ end rtl;
             value = str(value).lower()
             type = 'boolean'
 
-        elif isinstance(value, (int, ast.Const)):
-            if isinstance(value, ast.Const):
+        elif isinstance(value, (int, _ast.Const)):
+            if isinstance(value, _ast.Const):
                 value = value.value
 
             if abs(value) < 2**32:
@@ -389,20 +389,20 @@ end rtl;
             '', # Add new line at the end to separate blocks
         ))
 
-    def _get_if_condition(self, condition: ast.Value) -> str:
+    def _get_if_condition(self, condition: _ast.Value) -> str:
 
         if len(condition) != 1:
             raise RuntimeError(f"Invalid condition, must have width 1: {condition}")
 
-        if isinstance(condition, ast.Slice):
+        if isinstance(condition, _ast.Slice):
             condition = celosia_module.MemoryModule._slice_check_const(condition.value, condition.start, condition.stop)
 
-        if isinstance(condition, ast.Const):
+        if isinstance(condition, _ast.Const):
             # FIX: If '0'/'1' not allowed apparently
             ret = 'false' if condition.value == 0 else 'true'
 
         else:
-            if isinstance(condition, ast.Signal):
+            if isinstance(condition, _ast.Signal):
                 condition = condition[0]
             ret = str(self._parse_rhs(condition, allow_signed=False, force_bool=True))
 
@@ -532,7 +532,7 @@ end rtl;
 
     def _parse_rhs(
         self,
-        rhs: Union[ast.Value, int, str, celosia_signal.MemoryPort],
+        rhs: Union[_ast.Value, int, str, celosia_signal.MemoryPort],
         size: int = None,
         allow_signed: bool = True,
         force_bool: bool = False,
@@ -544,7 +544,7 @@ end rtl;
         if size is None:
             size = len(rhs)
 
-        if isinstance(rhs, ast.Const):
+        if isinstance(rhs, _ast.Const):
             signed = rhs.signed
             value = rhs.value
             width = max(size, rhs.width)
@@ -563,7 +563,7 @@ end rtl;
             if not operation:
                 rhs = f'std_logic_vector({rhs})'
 
-        elif isinstance(rhs, ast.Signal):
+        elif isinstance(rhs, _ast.Signal):
             signed = allow_signed and rhs.shape().signed
             width = len(rhs)
             rhs = self.module.signals.get(rhs).name
@@ -581,10 +581,10 @@ end rtl;
             if operation:
                 rhs = f'{self._sign_fn(signed)}({rhs})'
 
-        elif isinstance(rhs, ast.Cat):
+        elif isinstance(rhs, _ast.Cat):
             rhs = f"{' & '.join(self._parse_rhs(part) for part in rhs.parts[::-1])}"
 
-        elif isinstance(rhs, ast.Slice):
+        elif isinstance(rhs, _ast.Slice):
             if (rhs.start == 0 and rhs.stop >= len(rhs.value)) and not force_bool:
                 rhs = self._parse_rhs(rhs.value)
             else:
@@ -594,10 +594,10 @@ end rtl;
                     idx = f'{rhs.stop-1} downto {rhs.start}'
                 rhs = f"{self._parse_rhs(rhs.value, allow_signed=False)}({idx})"
 
-        elif isinstance(rhs, ast.Operator):
+        elif isinstance(rhs, _ast.Operator):
             rhs = self._parse_op(rhs, size=size, force_bool=force_bool, operation=operation)
 
-        elif isinstance(rhs, ast.Part):
+        elif isinstance(rhs, _ast.Part):
             if rhs.stride != 1:
                 raise RuntimeError("Only Parts with stride 1 supported at end stage!")
             rhs = f'{self._parse_rhs(rhs.value)} >> {self._parse_rhs(rhs.offset)}'
@@ -628,7 +628,7 @@ end rtl;
     def _sign_fn(signed: bool) -> str:
         return 'signed' if signed else 'unsigned'
 
-    def _parse_op(self, rhs: ast.Operator, **kwargs) -> Union[int, str]:
+    def _parse_op(self, rhs: _ast.Operator, **kwargs) -> Union[int, str]:
         if len(rhs.operands) == 1:
             fn = self._parse_unary_op
         elif len(rhs.operands) == 2:
@@ -640,7 +640,7 @@ end rtl;
 
         return fn(rhs, **kwargs)
 
-    def _parse_unary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
+    def _parse_unary_op(self, rhs: _ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
         allow_signed = rhs.operator not in ('u', 's')
         parsed = tuple(self._parse_rhs(op, allow_signed=allow_signed) for op in rhs.operands)
         p0, = parsed
@@ -663,7 +663,7 @@ end rtl;
             if force_bool:
                 rhs = f'or {p0}'
             else:
-                rhs = f'"0" when {p0} = {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))} else "1"'
+                rhs = f'"0" when {p0} = {self._parse_rhs(_ast.Const(0, len(rhs.operands[0])))} else "1"'
 
         elif rhs.operator in ('r|', 'r&', 'r^'):
             if len(rhs.operands[0]) == 1:
@@ -680,7 +680,7 @@ end rtl;
 
         return rhs
 
-    def _parse_binary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
+    def _parse_binary_op(self, rhs: _ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
         as_op = rhs.operator not in ('<<', '>>', '&', '^', '|')
         parsed = tuple(self._parse_rhs(op, operation=as_op) for op in rhs.operands)
         p0, p1 = parsed
@@ -713,7 +713,7 @@ end rtl;
 
         return rhs
 
-    def _parse_ternary_op(self, rhs: ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
+    def _parse_ternary_op(self, rhs: _ast.Operator, size: int, force_bool: bool = False, operation: bool = False) -> Union[int, str]:
         p0 = self._get_if_condition(rhs.operands[0])
         parsed = tuple(self._parse_rhs(op) for op in rhs.operands[1:])
         p1, p2 = parsed
@@ -736,7 +736,7 @@ end rtl;
     def _parse_parameter(self, parameter: Any):
         # TODO: This should be paired with blackboxes to avoid type mismatches
 
-        if isinstance(parameter, ast.Const):
+        if isinstance(parameter, _ast.Const):
             if parameter.width < 32:
                 parameter = parameter.value
             else:
@@ -746,12 +746,11 @@ end rtl;
         return parameter
 
 def convert(
-    module: Union[ir.Fragment, ir.Elaboratable],
+    module: Any,
     name: str = 'top',
-    ports: list[ast.Signal] = None,
+    ports: list[_ast.Signal] = None,
     platform = None,
     spaces: int = 4,
-    fragment_prepare: bool = True,
     blackboxes: list[dict[str, Union[int, str, tuple]]] = None,
 ):
     return VHDL(
@@ -762,5 +761,4 @@ def convert(
         name = name,
         ports = ports,
         platform = platform,
-        fragment_prepare = fragment_prepare,
     )

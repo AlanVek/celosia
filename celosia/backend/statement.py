@@ -1,23 +1,23 @@
-from amaranth.hdl import ast
+from amaranth.hdl import _ast
 from typing import Union
 
 class Statement:
-    def _rhs_signals(self) -> ast.SignalSet:
-        return ast.SignalSet()
+    def _rhs_signals(self) -> _ast.SignalSet:
+        return _ast.SignalSet()
 
 class Assign(Statement):
-    def __init__(self, rhs: ast.Value, start_idx: int = None, stop_idx: int = None):
+    def __init__(self, rhs: _ast.Value, start_idx: int = None, stop_idx: int = None):
         self.rhs = rhs
         self._start_idx = start_idx
         self._stop_idx = stop_idx
 
-    def _rhs_signals(self) -> ast.SignalSet:
+    def _rhs_signals(self) -> _ast.SignalSet:
         return super()._rhs_signals() | self.rhs._rhs_signals()
 
 class Switch(Statement):
 
     class Case:
-        def __init__(self, test: ast.Value, statements: list[Statement]):
+        def __init__(self, test: _ast.Value, statements: list[Statement]):
             self.test = test
             self.statements = statements
 
@@ -28,7 +28,7 @@ class Switch(Statement):
         def __init__(self, statements: list[Statement]):
             super().__init__(None, statements)
 
-    def __init__(self, test: ast.Value, cases: dict[Union[int, str, tuple], list[Statement]]):
+    def __init__(self, test: _ast.Value, cases: dict[Union[int, str, tuple], list[Statement]]):
         self.test = test
         self.cases = self.process_cases(cases)
 
@@ -98,7 +98,7 @@ class Switch(Statement):
                     res.append(self.Else(statements))
                 else:
                     # FIX: Weird case, might not be filtered by previous stages
-                    res.append(self.If(ast.Const(1, 1), statements))
+                    res.append(self.If(_ast.Const(1, 1), statements))
                 break
 
             if case.count('1') != 1 or not all(c in ['?', '1'] for c in case):
@@ -109,7 +109,7 @@ class Switch(Statement):
 
         return res
 
-    def _rhs_signals(self) -> ast.SignalSet:
+    def _rhs_signals(self) -> _ast.SignalSet:
         ret = super()._rhs_signals()
 
         ret.update(self.test._rhs_signals())

@@ -3,7 +3,7 @@ import celosia.backend.signal as celosia_signal
 import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
 from textwrap import indent
-from amaranth.hdl import ast, ir
+from amaranth.hdl import _ast
 from typing import Union, Any
 
 class Verilog(HDL):
@@ -120,7 +120,7 @@ endmodule
             else:
                 type = 'reg'
                 if mapping.domain is not None:
-                    reset = self._parse_rhs(ast.Const(mapping.signal.reset, len(mapping.signal)))
+                    reset = self._parse_rhs(_ast.Const(mapping.signal.reset, len(mapping.signal)))
 
             if isinstance(mapping, celosia_signal.Port):
                 dir = 'input' if mapping.direction == 'i' else 'output' if mapping.direction == 'o' else 'inout'
@@ -308,8 +308,8 @@ endmodule
 
         return res
 
-    def _parse_rhs(self, rhs: Union[ast.Value, int, str, celosia_signal.MemoryPort], allow_signed: bool = True):
-        if isinstance(rhs, ast.Const):
+    def _parse_rhs(self, rhs: Union[_ast.Value, int, str, celosia_signal.MemoryPort], allow_signed: bool = True):
+        if isinstance(rhs, _ast.Const):
             signed = rhs.signed and allow_signed
             value = rhs.value
             if value < 0:
@@ -319,14 +319,14 @@ endmodule
             if signed:
                 rhs = f'$signed({rhs})'
 
-        elif isinstance(rhs, ast.Signal):
+        elif isinstance(rhs, _ast.Signal):
             signed = allow_signed and rhs.shape().signed
             rhs = self.module.signals.get(rhs).name
             if signed:
                 rhs = f'$signed({rhs})'
-        elif isinstance(rhs, ast.Cat):
+        elif isinstance(rhs, _ast.Cat):
             rhs = f"{{ {', '.join(self._parse_rhs(part) for part in rhs.parts[::-1])} }}"
-        elif isinstance(rhs, ast.Slice):
+        elif isinstance(rhs, _ast.Slice):
             if rhs.start == 0 and rhs.stop >= len(rhs.value):
                 rhs = self._parse_rhs(rhs.value)
             else:
@@ -337,7 +337,7 @@ endmodule
 
                 rhs = f"{self._parse_rhs(rhs.value, allow_signed=False)}[{idx}]"
 
-        elif isinstance(rhs, ast.Operator):
+        elif isinstance(rhs, _ast.Operator):
             allow_signed = rhs.operator != 'u'
             parsed = list(map(lambda x: self._parse_rhs(x, allow_signed=allow_signed), rhs.operands))
             if len(rhs.operands) == 1:
@@ -347,7 +347,7 @@ endmodule
                 elif rhs.operator in ('~', '-'):
                     rhs = f'{rhs.operator} {p0}'
                 elif rhs.operator == 'b':
-                    rhs = f'{p0} != {self._parse_rhs(ast.Const(0, len(rhs.operands[0])))}'
+                    rhs = f'{p0} != {self._parse_rhs(_ast.Const(0, len(rhs.operands[0])))}'
                 elif rhs.operator in ('r|', 'r&', 'r^'):
                     rhs = f'{rhs.operator[-1]} {p0}'
                 elif rhs.operator == "u":
@@ -376,7 +376,7 @@ endmodule
             else:
                 raise RuntimeError(f"Unknown operator and operands: {rhs.operator}, {rhs.operands}")
 
-        elif isinstance(rhs, ast.Part):
+        elif isinstance(rhs, _ast.Part):
             if rhs.stride != 1:
                 raise RuntimeError("Only Parts with stride 1 supported at end stage!")
             rhs = f'{self._parse_rhs(rhs.value)} >> {self._parse_rhs(rhs.offset)}'
@@ -388,7 +388,7 @@ endmodule
         return rhs
 
     @staticmethod
-    def _get_symbol(mapping: ast.Signal) -> str:
+    def _get_symbol(mapping: _ast.Signal) -> str:
         if mapping.static or mapping.domain is None:
             res ='='
         else:
@@ -400,7 +400,7 @@ endmodule
         return super()._escape_string(string.replace('"', '\\"'))
 
     def _parse_parameter(self, parameter: Any):
-        if isinstance(parameter, ast.Const):
+        if isinstance(parameter, _ast.Const):
             parameter = self._parse_rhs(parameter, allow_signed=False)
         else:
             parameter = super()._parse_parameter(parameter)
@@ -408,16 +408,15 @@ endmodule
 
     def _parse_attribute(self, key: str, value: Any) -> str:
         if isinstance(value, int):
-            value = ast.Const(value, max(32, value.bit_length()))
+            value = _ast.Const(value, max(32, value.bit_length()))
         return super()._parse_attribute(key, value)
 
 def convert(
-    module: Union[ir.Fragment, ir.Elaboratable],
+    module: Any,
     name: str = 'top',
-    ports: list[ast.Signal] = None,
+    ports: list[_ast.Signal] = None,
     platform = None,
     spaces: int = 4,
-    fragment_prepare: bool = True,
 ):
     return Verilog(
         spaces = spaces,
@@ -426,5 +425,4 @@ def convert(
         name = name,
         ports = ports,
         platform = platform,
-        fragment_prepare = fragment_prepare,
     )

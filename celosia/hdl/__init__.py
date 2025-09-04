@@ -2,7 +2,7 @@ from textwrap import indent
 import celosia.backend.signal as celosia_signal
 import celosia.backend.module as celosia_module
 import celosia.backend.statement as celosia_statement
-from amaranth.hdl import ast, ir
+from amaranth.hdl import _ast, _ir, _nir
 from typing import Union, Any
 import importlib
 import pkgutil
@@ -35,7 +35,7 @@ class HDL(metaclass=HDLExtensions):
 
         self.module: celosia_module.Module = None
         self.invalid_names: set[str] = set()
-        self.name_map: dict[ast.SignalDict, tuple[str, ...]] = ast.SignalDict()
+        self.name_map: dict[_ast.SignalDict, tuple[str, ...]] = _ast.SignalDict()
         self.hierarchy: tuple[str, ...] = ()
 
     @property
@@ -130,11 +130,30 @@ class HDL(metaclass=HDLExtensions):
         for submodule in module.submodules:
             self._cleanup_names(submodule)
 
-    def convert(self, fragment: Union[ir.Fragment, ir.Elaboratable], name: str = 'top', ports: list[ast.Signal] = None, platform=None, fragment_prepare: bool = True):
-        if fragment_prepare:
-            fragment = ir.Fragment.get(fragment, platform).prepare(ports)
+    @staticmethod
+    def _build_netlist(fragment: Any, ports=(), *, name="top", all_undef_to_ff=False, platform=None, **kwargs) -> _ir.NetlistEmitter:
+        if isinstance(fragment, _ir.Design):
+            design = fragment
+        elif isinstance(fragment, (_ir.Fragment, _ir.Elaboratable)):
+            design = _ir.Fragment.get(fragment, platform).prepare(ports=ports, hierarchy=(name,), **kwargs)
+        else:
+            raise ValueError(f"Invalid fragment type: {type(fragment)}")
 
-        m = celosia_module.Module(name, fragment).prepare()
+        netlist = _nir.Netlist()
+        emitter = _ir.NetlistEmitter(netlist, design, all_undef_to_ff=all_undef_to_ff)
+        emitter.emit_fragment(design.fragment, None)
+        netlist.check_comb_cycles()
+        netlist.resolve_all_nets()
+        _ir._compute_net_flows(netlist)
+        _ir._compute_ports(netlist)
+        _ir._compute_ionet_dirs(netlist)
+        _ir._compute_io_ports(netlist, design.ports)
+
+        return emitter
+
+    def convert(self, fragment: Any, name: str = 'top', ports: list[_ast.Signal] = None, platform=None):
+        emitter = self._build_netlist(fragment, ports=ports, name=name, platform=platform)
+        m = celosia_module.Module(name, emitter).prepare()
 
         self.name_map.clear()
         self.hierarchy = ()
@@ -301,7 +320,7 @@ class HDL(metaclass=HDLExtensions):
 
     def _parse_parameter(self, parameter: Any):
         if isinstance(parameter, int):
-            parameter = self._parse_parameter(ast.Const(parameter, parameter.bit_length()))
+            parameter = self._parse_parameter(_ast.Const(parameter, parameter.bit_length()))
         elif isinstance(parameter, float):
             pass
         elif isinstance(parameter, str):
