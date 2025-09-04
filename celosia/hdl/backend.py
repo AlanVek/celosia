@@ -1,6 +1,6 @@
 from amaranth.back import rtlil
 from amaranth.back.rtlil import _const
-from typing import Any
+from typing import Any, Union
 from amaranth.hdl import _ast
 import re
 
@@ -34,13 +34,13 @@ class Module(rtlil.Module):
 
         line.port_id = 0
 
-        ports = []
-        processes = []
-        submodules = []
-        signals = []
-        memories = []
-        operators = []
-        flip_flops = []
+        ports: list[rtlil.Wire] = []
+        processes: list[rtlil.Process] = []
+        submodules: list[rtlil.Cell] = []
+        signals: list[rtlil.Wire] = []
+        memories: list[rtlil.Memory] = []
+        operators: list[rtlil.Cell] = []
+        flip_flops: list[rtlil.Cell] = []
 
         for name, cell in self.contents.items():
             destination = None
@@ -78,7 +78,7 @@ class Module(rtlil.Module):
             self._emit_flip_flop(flip_flop)
 
         for process in processes:
-            self._emit_process(process)
+            self._emit_process_contents(process.contents)
 
         for operator in operators:
             self._emit_operator(operator)
@@ -103,12 +103,10 @@ class Module(rtlil.Module):
     def _cell_is_ff(cls, cell: rtlil.Cell):
         return cls._cell_is_yosys(cell) and cell.kind in ('$dff', '$adff')
 
-    def _emit_process(self, process: rtlil.Process):
-        contents = process.contents
-
+    def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]]):
         index = 0
         while index < len(contents) and isinstance(contents[index], rtlil.Assignment):
-            self._emit_assignment(contents[index])
+            self._emit_process_assignment(contents[index])
             index += 1
         while index < len(contents):
             if isinstance(contents[index], rtlil.Assignment):
@@ -127,6 +125,10 @@ class Module(rtlil.Module):
                 index += 1
 
     def _emit_assignment(self, assignment: rtlil.Assignment):
+        print('Emit assignment:', assignment.lhs, assignment.rhs)
+        pass
+
+    def _emit_process_assignment(self, assignment: rtlil.Assignment):
         print('Emit assignment:', assignment.lhs, assignment.rhs)
         pass
 
@@ -173,7 +175,9 @@ class Module(rtlil.Module):
     def _const_repr(width, value):
         return ''
 
-    def _get_signal_name(self, signal: str):
+    def _get_signal_name(self, signal: str) -> str:
+        if signal is None:
+            return None
 
         const_pattern = re.compile(r"(\d+)'(\d+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
@@ -206,18 +210,19 @@ class Module(rtlil.Module):
                 index = slice_match.group(2)
 
                 if ':' in index:
-                    stop, start = index.split(':')
+                    stop, start = map(int, index.split(':'))
                 else:
-                    stop = start = index
+                    stop = start = int(index)
 
-                if signal_width == int(stop) - int(start) + 1:
+                if signal_width == stop - start + 1:
                     real_parts.append(name)
                 else:
-                    real_parts.append(slice_match.group())
+                    real_parts.append(f'{self._get_slice(name, start, stop)}')
 
                 signal = signal[slice_match.end() + 1:]
                 continue
 
+            real_parts.append(signal)
             break
 
         if concat:
@@ -228,3 +233,7 @@ class Module(rtlil.Module):
     @classmethod
     def _concat(cls, parts):
         return str(parts)
+
+    @classmethod
+    def _get_slice(cls, name: str, start: int, stop: int):
+        return ''

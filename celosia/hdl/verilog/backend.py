@@ -1,5 +1,5 @@
 from celosia.hdl.backend import Module as BaseModule
-from typing import Any
+from typing import Any, Union
 from amaranth.back import rtlil
 
 class VerilogModule(BaseModule):
@@ -96,6 +96,10 @@ class VerilogModule(BaseModule):
         print('Assign:', assignment.lhs, '--', assignment.rhs)
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, prefix='assign')
 
+    def _emit_process_assignment(self, assignment: rtlil.Assignment):
+        print('Emit process assignment:', assignment.lhs, assignment.rhs)
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
+
     def _emit_switch(self, switch: rtlil.Switch):
         print('Emit switch:', switch.sel, switch.cases)
 
@@ -151,12 +155,12 @@ class VerilogModule(BaseModule):
         print('Emit flip_flop:', flip_flop.name, flip_flop.kind, flip_flop.ports)
 
         with self._line.indent():
-            data = flip_flop.ports['D']
-            clock = flip_flop.ports['CLK']
-            out = flip_flop.ports['Q']
+            data = self._get_signal_name(flip_flop.ports['D'])
+            clock = self._get_signal_name(flip_flop.ports['CLK'])
+            out = self._get_signal_name(flip_flop.ports['Q'])
             polarity = 'pos' if flip_flop.parameters['CLK_POLARITY'] else 'neg'
 
-            arst = flip_flop.ports.get('ARST', None)
+            arst = self._get_signal_name(flip_flop.ports.get('ARST', None))
             arst_polarity = 'pos' if flip_flop.parameters.get('ARST_POLARITY', True) else 'neg'
             arst_value= flip_flop.parameters.get('ARST_VALUE', None)
 
@@ -182,15 +186,60 @@ class VerilogModule(BaseModule):
 
                 self._emit_switch(switch)
 
+            self._line('end')
+
     def _emit_module_end(self):
         pass
 
     def _emit_connections(self):
         pass
+        print(self.connections)
 
     def _signal_is_reg(self, signal: rtlil.Wire):
-        # TODO: Check for processes and operators
-        if 'init' in signal.attributes:
-            return True
+        # TODO: Check for processes and operators (default should be False, not True)
+        if 'init' not in signal.attributes:
+            for wire, _ in self.connections:
+                if wire == signal.name:
+                    return False
 
-        return False
+        return True
+
+    def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]]):
+        # TODO: Use is_block
+        # is_block = any(isinstance(content, rtlil.Switch) for content in process.contents)
+
+        with self._line.indent():
+            self._line('always @* begin')
+            with self._line.indent():
+                super()._emit_process_contents(contents)
+            self._line('end')
+
+    @classmethod
+    def _get_slice(cls, name: str, start: int, stop: int):
+        if stop == start:
+            idx = start
+        else:
+            idx = f'{stop}:{start}'
+        return f'{name}[{idx}]'
+
+    def _emit_switch(self, switch: rtlil.Switch):
+        print('Emit switch:', switch.sel, switch.cases)
+        with self._line.indent():
+            self._line(f'casez ({self._get_signal_name(switch.sel)})')
+            for case in switch.cases:
+                self._emit_case(case)
+            self._line('endcase')
+
+    def _emit_case(self, case: rtlil.Case):
+        with self._line.indent():
+            if case.patterns:
+                pattern = ', '.join(self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns)
+            else:
+                pattern = 'default'
+            self._line(f'{pattern}: begin')
+            with self._line.indent():
+                super()._emit_process_contents(case.contents)
+            self._line('endcase')
+
+    def _emit_module_end(self):
+        self._line('endmodule')
