@@ -163,7 +163,8 @@ class Module(rtlil.Module):
         pass
 
     def _emit_connections(self):
-        pass
+        for lhs, rhs in self.connections:
+            self._emit_assignment(rtlil.Assignment(lhs, rhs))
 
     def _get_initial(self, signal: rtlil.Wire) -> str:
         ret: _ast.Const = signal.attributes.pop('init', None)

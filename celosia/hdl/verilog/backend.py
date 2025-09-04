@@ -191,10 +191,6 @@ class VerilogModule(BaseModule):
     def _emit_module_end(self):
         pass
 
-    def _emit_connections(self):
-        pass
-        print(self.connections)
-
     def _signal_is_reg(self, signal: rtlil.Wire):
         # TODO: Check for processes and operators (default should be False, not True)
         if 'init' not in signal.attributes:
@@ -233,7 +229,7 @@ class VerilogModule(BaseModule):
     def _emit_case(self, case: rtlil.Case):
         with self._line.indent():
             if case.patterns:
-                pattern = ', '.join(self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns)
+                pattern = ', '.join(self._get_signal_name(f"{len(pattern)}'{pattern.replace('-', '?')}") for pattern in case.patterns)
             else:
                 pattern = 'default'
             self._line(f'{pattern}: begin')
