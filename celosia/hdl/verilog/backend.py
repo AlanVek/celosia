@@ -82,8 +82,22 @@ class VerilogModule(BaseModule):
 
     @staticmethod
     def _const_repr(width, value):
-        # TODO: Check signed
-        return f"{int(width)}'h{hex(int(value))[2:]}"
+
+        if isinstance(value, str):
+            if '-' in value:
+                format = 'b'
+            else:
+                format = 'h'
+                value = hex(int(value, 2))[2:]
+
+        elif isinstance(value, int):
+            format = 'h'
+            if value < 0:
+                value += 2**int(width)
+
+            value = hex(value)[2:]
+
+        return f"{width}'{format}{value}"
 
     @classmethod
     def _concat(cls, parts):

@@ -285,7 +285,7 @@ class Module(rtlil.Module):
         if isinstance(signal, _ast.Const):
             return self._const_repr(signal.width, signal.value)
 
-        const_pattern = re.compile(r"(\d+)'(\d+)")
+        const_pattern = re.compile(r"(\d+)'([\d|-]+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
 
         if signal.startswith('{') and signal.endswith('}'):
