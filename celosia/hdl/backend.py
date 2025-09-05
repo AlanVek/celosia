@@ -11,7 +11,15 @@ class Module(rtlil.Module):
         super().__init__(*args, **kwargs)
         self._line: rtlil.Emitter = None
 
-        self._signals: dict[str, int] = {}
+        self._signals: dict[str, rtlil.Wire] = {}
+
+        self._emitted_ports: list[rtlil.Wire] = []
+        self._emitted_processes: list[rtlil.Process] = []
+        self._emitted_submodules: list[rtlil.Cell] = []
+        self._emitted_signals: list[rtlil.Wire] = []
+        self._emitted_memories: list[rtlil.Memory] = []
+        self._emitted_operators: list[rtlil.Cell] = []
+        self._emitted_flip_flops: list[rtlil.Cell] = []
 
         self._process_id = 0
 
@@ -36,56 +44,48 @@ class Module(rtlil.Module):
 
         line.port_id = 0
 
-        ports: list[rtlil.Wire] = []
-        processes: list[rtlil.Process] = []
-        submodules: list[rtlil.Cell] = []
-        signals: list[rtlil.Wire] = []
-        memories: list[rtlil.Memory] = []
-        operators: list[rtlil.Cell] = []
-        flip_flops: list[rtlil.Cell] = []
-
         for name, cell in self.contents.items():
             destination = None
             if isinstance(cell, rtlil.Wire):
                 if cell.port_kind is None:
-                    destination = signals
+                    destination = self._emitted_signals
                 else:
-                    destination = ports
+                    destination = self._emitted_ports
             elif isinstance(cell, rtlil.Process):
-                destination = processes
+                destination = self._emitted_processes
             elif isinstance(cell, rtlil.Cell):
                 if self._cell_is_submodule(cell):
-                    destination = submodules
+                    destination = self._emitted_submodules
                 elif self._cell_is_ff(cell):
-                    destination = flip_flops
+                    destination = self._emitted_flip_flops
                 elif self._cell_is_yosys(cell):
-                    destination = operators
+                    destination = self._emitted_operators
             elif isinstance(cell, rtlil.Memory):
-                destination = memories
+                destination = self._emitted_memories
 
             if destination is None:
                 raise RuntimeError(f"Unknown cell type named {name}: {type(cell)}")
 
             destination.append(cell)
 
-        self._emit_module_and_ports(ports)
+        self._emit_module_and_ports(self._emitted_ports)
 
-        for signal in signals:
+        for signal in self._emitted_signals:
             self._emit_signal(signal)
 
-        for memory in memories:
+        for memory in self._emitted_memories:
             self._emit_memory(memory)
 
-        for flip_flop in flip_flops:
+        for flip_flop in self._emitted_flip_flops:
             self._emit_flip_flop(flip_flop)
 
-        for process in processes:
+        for process in self._emitted_processes:
             self._emit_process(process)
 
-        for operator in operators:
+        for operator in self._emitted_operators:
             self._emit_operator(operator)
 
-        for submodule in submodules:
+        for submodule in self._emitted_submodules:
             self._emit_submodule(submodule)
 
         self._emit_connections()
@@ -206,7 +206,7 @@ class Module(rtlil.Module):
         pass
 
     def _emit_signal(self, signal: rtlil.Wire):
-        self._signals[signal.name] = signal.width
+        self._signals[signal.name] = signal
         print('Emit signal:', signal.name, signal.width)
         pass
 
@@ -308,9 +308,8 @@ class Module(rtlil.Module):
             if slice_match is not None:
                 name = slice_match.group(1)
 
-                signal_width = self._signals.get(name, None)
-
-                if signal_width is None:
+                wire = self._signals.get(name, None)
+                if wire is None:
                     raise RuntimeError(f"Unknown signal: {name}")
 
                 index = slice_match.group(2)
@@ -320,7 +319,7 @@ class Module(rtlil.Module):
                 else:
                     stop = start = int(index)
 
-                if signal_width == stop - start + 1:
+                if wire.width == stop - start + 1:
                     real_parts.append(name)
                 else:
                     real_parts.append(f'{self._get_slice(name, start, stop)}')
@@ -328,8 +327,14 @@ class Module(rtlil.Module):
                 signal = signal[slice_match.end() + 1:]
                 continue
 
-            real_parts.append(signal)
-            break
+            space_idx = signal.find(' ')
+            if space_idx < 0:
+                space_idx = len(signal)
+                real_parts.append(signal)
+            else:
+                real_parts.append(signal[:space_idx])
+
+            signal = signal[space_idx + 1:]
 
         if concat:
             return self._concat(real_parts)

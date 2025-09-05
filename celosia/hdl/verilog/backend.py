@@ -1,6 +1,7 @@
 from celosia.hdl.backend import Module as BaseModule
 from typing import Any, Union
 from amaranth.back import rtlil
+import re
 
 class VerilogModule(BaseModule):
 
@@ -33,6 +34,11 @@ class VerilogModule(BaseModule):
         'weak0',          'weak1',          'while',          'wire',
         'wor',            'xnor',           'xor',
     ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self._regs: set[str] = set()
 
     @classmethod
     def _const(cls, value: Any):
@@ -140,6 +146,8 @@ class VerilogModule(BaseModule):
         pass
 
     def _emit_module_and_ports(self, ports: list["rtlil.Wire"]):
+        self._collect_process_signals(self._emitted_processes)
+
         self._line(f"module {self.name} (")
         with self._line.indent():
             for i, port in enumerate(ports):
@@ -167,13 +175,7 @@ class VerilogModule(BaseModule):
         self._line('end')
 
     def _signal_is_reg(self, signal: rtlil.Wire):
-        # TODO: Check for processes and operators (default should be False, not True)
-        if 'init' not in signal.attributes:
-            for wire, _ in self.connections:
-                if wire == signal.name:
-                    return False
-
-        return True
+        return 'init' in signal.attributes or signal.name in self._regs
 
     def _emit_process_start(self) -> str:
         ret = super()._emit_process_start()
@@ -211,3 +213,57 @@ class VerilogModule(BaseModule):
 
     def _emit_module_end(self):
         self._line('endmodule')
+
+    def _get_raw_signals(self, signal: str) -> set[str]:
+        ret = set()
+
+        if signal is None:
+            return ret
+
+        slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
+
+        if signal.startswith('{') and signal.endswith('}'):
+            signal = signal[1:-1].strip()
+
+        while signal:
+            slice_match = slice_pattern.match(signal)
+            if slice_match is not None:
+                name = slice_match.group(1)
+                ret.add(name)
+                signal = signal[slice_match.end() + 1:]
+                continue
+
+            space_idx = signal.find(' ')
+            if space_idx < 0:
+                space_idx = len(signal)
+                ret.add(signal)
+            else:
+                ret.add(signal[:space_idx])
+
+            signal = signal[space_idx + 1:]
+
+        return ret
+
+    def _collect_lhs(self, assignment: Union[rtlil.Assignment, rtlil.Switch, rtlil.Case]) -> set[str]:
+        ret = set()
+
+
+        # TODO: We can probably break early if LHS is never a concatenation
+        if isinstance(assignment, rtlil.Assignment):
+            print('Collect:', assignment.lhs, self._get_raw_signals(assignment.lhs))
+            ret.update(self._get_raw_signals(assignment.lhs))
+
+        elif isinstance(assignment, rtlil.Switch):
+            for case in assignment.cases:
+                ret.update(self._collect_lhs(case))
+
+        elif isinstance(assignment, rtlil.Case):
+            for content in assignment.contents:
+                ret.update(self._collect_lhs(content))
+
+        return ret
+
+    def _collect_process_signals(self, processes: list[rtlil.Process]):
+        for process in processes:
+            for content in process.contents:
+                self._regs.update(self._collect_lhs(content))
