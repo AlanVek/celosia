@@ -93,15 +93,13 @@ class VerilogModule(BaseModule):
             self._line(f'{prefix}{self._get_signal_name(lhs)} {symbol} {self._get_signal_name(rhs)};')
 
     def _emit_assignment(self, assignment: rtlil.Assignment):
-        print('Assign:', assignment.lhs, '--', assignment.rhs)
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, prefix='assign')
 
     def _emit_process_assignment(self, assignment: rtlil.Assignment):
-        print('Emit process assignment:', assignment.lhs, assignment.rhs)
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
 
-    def _emit_switch(self, switch: rtlil.Switch):
-        print('Emit switch:', switch.sel, switch.cases)
+    def _emit_ff_assignment(self, assignment: rtlil.Assignment):
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '<=')
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         print('Emit submodule:', submodule.name, submodule.kind)
@@ -111,7 +109,7 @@ class VerilogModule(BaseModule):
         print('Emit operator:', operator.name, operator.kind, operator.ports)
         pass
 
-    def _emit_signal(self, signal: rtlil.Wire, direction=None):
+    def _emit_signal(self, signal: rtlil.Wire):
         super()._emit_signal(signal)
         with self._line.indent():
             type = 'reg' if self._signal_is_reg(signal) else 'wire'
@@ -122,10 +120,10 @@ class VerilogModule(BaseModule):
             else:
                 width = f'[{signal.width - 1}:0] '
 
-            if direction is None:
+            if signal.port_kind is None:
                 dir = ''
             else:
-                dir = f'{direction} '
+                dir = f'{signal.port_kind} '
 
             if init is None:
                 reset = ''
@@ -149,47 +147,24 @@ class VerilogModule(BaseModule):
         self._line(');')
 
         for i, port in enumerate(ports):
-            self._emit_signal(port, direction = port.port_kind)
+            self._emit_signal(port)
 
-    def _emit_flip_flop(self, flip_flop: rtlil.Cell):
-        print('Emit flip_flop:', flip_flop.name, flip_flop.kind, flip_flop.ports)
+    def _emit_flip_flop_start(self, clock: str, polarity: bool, arst: str = None, arst_polarity = False) -> str:
+        ret = super()._emit_flip_flop_start(clock, polarity, arst, arst_polarity)
 
-        with self._line.indent():
-            data = self._get_signal_name(flip_flop.ports['D'])
-            clock = self._get_signal_name(flip_flop.ports['CLK'])
-            out = self._get_signal_name(flip_flop.ports['Q'])
-            polarity = 'pos' if flip_flop.parameters['CLK_POLARITY'] else 'neg'
+        polarity = 'pos' if polarity else 'neg'
+        arst_polarity = 'pos' if arst_polarity else 'neg'
+        trigger = f'always @ ({polarity}edge {clock}'
 
-            arst = self._get_signal_name(flip_flop.ports.get('ARST', None))
-            arst_polarity = 'pos' if flip_flop.parameters.get('ARST_POLARITY', True) else 'neg'
-            arst_value= flip_flop.parameters.get('ARST_VALUE', None)
+        if arst is not None:
+            trigger += f', {arst_polarity}edge {arst}'
 
-            trigger = f'always @ ({polarity}edge {clock}'
+        self._line(trigger + ') begin')
 
-            if arst is not None:
-                trigger += f', {arst_polarity}edge {arst}'
+        return ret
 
-            self._line(trigger + ') begin')
-
-            if arst is None:
-                self._emit_assignment_lhs_rhs(out, data, symbol='<=')
-            else:
-                if arst_value is None:
-                    raise RuntimeError("Missing arst value for async reset")
-
-                switch = rtlil.Switch(arst)   # TODO: Check negated? Or not worth it?
-                reset_case = switch.case('1' if arst_polarity == 'pos' else '0')
-                reset_case.assign(out, arst_value)
-
-                default = switch.default()
-                default.assign(out, data)
-
-                self._emit_switch(switch)
-
-            self._line('end')
-
-    def _emit_module_end(self):
-        pass
+    def _emit_flip_flop_end(self, ff_id: str):
+        self._line('end')
 
     def _signal_is_reg(self, signal: rtlil.Wire):
         # TODO: Check for processes and operators (default should be False, not True)
@@ -200,15 +175,13 @@ class VerilogModule(BaseModule):
 
         return True
 
-    def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]]):
-        # TODO: Use is_block
-        # is_block = any(isinstance(content, rtlil.Switch) for content in process.contents)
+    def _emit_process_start(self) -> str:
+        ret = super()._emit_process_start()
+        self._line('always @* begin')
+        return ret
 
-        with self._line.indent():
-            self._line('always @* begin')
-            with self._line.indent():
-                super()._emit_process_contents(contents)
-            self._line('end')
+    def _emit_process_end(self, p_id: str):
+        self._line('end')
 
     @classmethod
     def _get_slice(cls, name: str, start: int, stop: int):
@@ -218,24 +191,23 @@ class VerilogModule(BaseModule):
             idx = f'{stop}:{start}'
         return f'{name}[{idx}]'
 
-    def _emit_switch(self, switch: rtlil.Switch):
-        print('Emit switch:', switch.sel, switch.cases)
-        with self._line.indent():
-            self._line(f'casez ({self._get_signal_name(switch.sel)})')
-            for case in switch.cases:
-                self._emit_case(case)
-            self._line('endcase')
+    def _emit_switch_start(self, sel: str):
+        self._line(f'casez ({sel})')
 
-    def _emit_case(self, case: rtlil.Case):
-        with self._line.indent():
-            if case.patterns:
-                pattern = ', '.join(self._get_signal_name(f"{len(pattern)}'{pattern.replace('-', '?')}") for pattern in case.patterns)
-            else:
-                pattern = 'default'
-            self._line(f'{pattern}: begin')
-            with self._line.indent():
-                super()._emit_process_contents(case.contents)
-            self._line('endcase')
+    def _emit_switch_end(self):
+        self._line('endcase')
+
+    def _case_patterns(self, pattern: tuple[str, ...]) -> str:
+        return ', '.join(p.replace('-', '?') for p in pattern)
+
+    def _case_default(self) -> str:
+        return 'default'
+
+    def _emit_case_start(self, pattern: str):
+        self._line(f'{pattern}: begin')
+
+    def _emit_case_end(self):
+        self._line('end')
 
     def _emit_module_end(self):
         self._line('endmodule')

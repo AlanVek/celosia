@@ -13,6 +13,8 @@ class Module(rtlil.Module):
 
         self._signals: dict[str, int] = {}
 
+        self._process_id = 0
+
     @classmethod
     def _const(cls, value: Any):
         return _const(value)
@@ -78,7 +80,7 @@ class Module(rtlil.Module):
             self._emit_flip_flop(flip_flop)
 
         for process in processes:
-            self._emit_process_contents(process.contents)
+            self._emit_process(process)
 
         for operator in operators:
             self._emit_operator(operator)
@@ -103,6 +105,23 @@ class Module(rtlil.Module):
     def _cell_is_ff(cls, cell: rtlil.Cell):
         return cls._cell_is_yosys(cell) and cell.kind in ('$dff', '$adff')
 
+    def _new_process(self) -> str:
+        ret = f'process_{self._process_id}'
+        self._process_id += 1
+        return ret
+
+    def _emit_process(self, process: rtlil.Process):
+        with self._line.indent():
+            p_id = self._emit_process_start()
+
+            with self._line.indent():
+                self._emit_process_contents(process.contents)
+
+            self._emit_process_end(p_id)
+
+    def _emit_process_start(self) -> str:
+        return self._new_process()
+
     def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]]):
         index = 0
         while index < len(contents) and isinstance(contents[index], rtlil.Assignment):
@@ -124,16 +143,59 @@ class Module(rtlil.Module):
                 self._emit_switch(contents[index])
                 index += 1
 
+    def _emit_process_end(self, p_id: str):
+        pass
+
     def _emit_assignment(self, assignment: rtlil.Assignment):
-        print('Emit assignment:', assignment.lhs, assignment.rhs)
         pass
 
     def _emit_process_assignment(self, assignment: rtlil.Assignment):
-        print('Emit assignment:', assignment.lhs, assignment.rhs)
+        pass
+
+    def _emit_ff_assignment(self, assignment: rtlil.Assignment):
         pass
 
     def _emit_switch(self, switch: rtlil.Switch):
-        print('Emit switch:', switch.sel, switch.cases)
+        with self._line.indent():
+            self._emit_switch_start(self._get_signal_name(switch.sel))
+
+            with self._line.indent():
+                self._emit_switch_contents(switch.sel, switch.cases)
+
+            self._emit_switch_end()
+
+    def _emit_switch_start(self, sel: str):
+        pass
+
+    def _emit_switch_contents(self, sel: str, cases: list[rtlil.Case]):
+        for case in cases:
+            self._emit_case(case)
+
+    def _emit_switch_end(self):
+        pass
+
+    def _emit_case(self, case: rtlil.Case):
+        if case.patterns:
+            pattern = self._case_patterns((self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
+        else:
+            pattern = self._case_default()
+
+        self._emit_case_start(pattern)
+        with self._line.indent():
+            self._emit_process_contents(case.contents)
+        self._emit_case_end()
+
+    def _case_patterns(self, pattern: tuple[str, ...]) -> str:
+        return ''
+
+    def _case_default(self) -> str:
+        return ''
+
+    def _emit_case_start(self, pattern: str):
+        pass
+
+    def _emit_case_end(self):
+        pass
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         print('Emit submodule:', submodule.name, submodule.kind)
@@ -157,7 +219,47 @@ class Module(rtlil.Module):
         pass
 
     def _emit_flip_flop(self, flip_flop: rtlil.Cell):
-        print('Emit flip_flop:', flip_flop.name, flip_flop.kind, flip_flop.ports)
+        arst_value = self._get_signal_name(flip_flop.parameters.get('ARST_VALUE', None))
+        arst_polarity = flip_flop.parameters.get('ARST_POLARITY', True)
+        arst = self._get_signal_name(flip_flop.ports.get('ARST', None))
+
+        with self._line.indent():
+            ff_id = self._emit_flip_flop_start(
+                clock = self._get_signal_name(flip_flop.ports['CLK']),
+                polarity = flip_flop.parameters['CLK_POLARITY'],
+                arst = arst,
+                arst_polarity = arst_polarity,
+            )
+
+            with self._line.indent():
+                self._emit_flip_flop_contents(
+                    data = self._get_signal_name(flip_flop.ports['D']),
+                    out = self._get_signal_name(flip_flop.ports['Q']),
+                    arst = arst,
+                    arst_polarity = arst_polarity,
+                    arst_value = arst_value,
+                )
+
+            self._emit_flip_flop_end(ff_id)
+
+    def _emit_flip_flop_start(self, clock: str, polarity: bool, arst: str = None, arst_polarity = False) -> str:
+        return self._new_process()
+
+    def _emit_flip_flop_contents(self, data: str, out: str, arst: str = None, arst_polarity = False, arst_value: str = None):
+        if arst is None:
+            self._emit_ff_assignment(rtlil.Assignment(out, data))
+        else:
+            if arst_value is None:
+                raise RuntimeError("Missing arst value for async reset")
+
+            switch = rtlil.Switch(arst)   # TODO: Check negated? Or not worth it?
+            switch.case(['1' if arst_polarity else '0']).assign(out, arst_value)
+            switch.default().assign(out, data)
+
+            self._emit_switch(switch)
+
+    def _emit_flip_flop_end(self, ff_id: str):
+        pass
 
     def _emit_module_end(self):
         pass
@@ -176,9 +278,12 @@ class Module(rtlil.Module):
     def _const_repr(width, value):
         return ''
 
-    def _get_signal_name(self, signal: str) -> str:
+    def _get_signal_name(self, signal: Union[str, _ast.Const]) -> str:
         if signal is None:
             return None
+
+        if isinstance(signal, _ast.Const):
+            return self._const_repr(signal.width, signal.value)
 
         const_pattern = re.compile(r"(\d+)'(\d+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
