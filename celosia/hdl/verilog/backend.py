@@ -99,7 +99,7 @@ class VerilogModule(BaseModule):
         return f"{width}'{format}{value}"
 
     @classmethod
-    def _concat(cls, parts):
+    def _concat(cls, parts) -> str:
         return f'{{ {", ".join(parts)} }}'
 
     def _emit_assignment_lhs_rhs(self, lhs: str, rhs: str, symbol = '=', prefix=None):
@@ -144,8 +144,8 @@ class VerilogModule(BaseModule):
     #     print('Emit memory:', memory.name, memory.depth, memory.width)
     #     pass
 
-    def _emit_module_and_ports(self, ports: list["rtlil.Wire"]):
-        self._collect_process_signals(self._emitted_processes)
+    def _emit_module_and_ports(self, ports: list[rtlil.Wire]):
+        self._collect_process_signals()
 
         self._line(f"module {self.name} (")
         with self._line.indent():
@@ -178,7 +178,7 @@ class VerilogModule(BaseModule):
         self._line('end')
 
     @classmethod
-    def _get_slice(cls, name: str, start: int, stop: int):
+    def _get_slice(cls, name: str, start: int, stop: int) -> str:
         if stop == start:
             idx = start
         else:
@@ -223,8 +223,8 @@ class VerilogModule(BaseModule):
 
         return ret
 
-    def _collect_process_signals(self, processes: list[rtlil.Process]):
-        for process in processes:
+    def _collect_process_signals(self):
+        for process, _ in self._emitted_processes:
             for content in process.contents:
                 self._regs.update(self._collect_lhs(content))
 

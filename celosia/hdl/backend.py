@@ -1,6 +1,6 @@
 from amaranth.back import rtlil
 from amaranth.back.rtlil import _const
-from celosia.hdl.memory import Memory
+from celosia.hdl.memory import Memory, MemoryIndex
 from typing import Any, Union
 from amaranth.hdl import _ast
 import re
@@ -15,7 +15,7 @@ class Module(rtlil.Module):
         self._signals: dict[str, rtlil.Wire] = {}
 
         self._emitted_ports: list[rtlil.Wire] = []
-        self._emitted_processes: list[rtlil.Process] = []
+        self._emitted_processes: list[tuple[rtlil.Process, dict]] = []
         self._emitted_submodules: list[rtlil.Cell] = []
         self._emitted_signals: list[rtlil.Wire] = []
         self._emitted_memories: dict[str, Memory] = {}
@@ -55,6 +55,7 @@ class Module(rtlil.Module):
                 else:
                     destination = self._emitted_ports
             elif isinstance(cell, rtlil.Process):
+                cell = (cell, {})
                 destination = self._emitted_processes
             elif isinstance(cell, rtlil.Cell):
                 if self._cell_is_submodule(cell):
@@ -83,17 +84,18 @@ class Module(rtlil.Module):
 
         self._emit_module_and_ports(self._emitted_ports)
 
-        for signal in self._emitted_signals:
-            self._emit_signal(signal)
-
+        # Memories need to go first because they may create new signals, processes and connections
         for memory in self._emitted_memories.values():
             self._emit_memory(memory)
+
+        for signal in self._emitted_signals:
+            self._emit_signal(signal)
 
         for flip_flop in self._emitted_flip_flops:
             self._emit_flip_flop(flip_flop)
 
-        for process in self._emitted_processes:
-            self._emit_process(process)
+        for process, kwargs in self._emitted_processes:
+            self._emit_process(process, **kwargs)
 
         for operator in self._emitted_operators:
             self._emit_operator(operator)
@@ -190,7 +192,9 @@ class Module(rtlil.Module):
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
         with self._line.indent():
-            self._emit_switch_start(self._get_signal_name(switch.sel))
+            # TODO: Handle operators (mostly for memory transparency, maybe it can be a special case)
+            # self._emit_switch_start(self._get_signal_name(switch.sel))
+            self._emit_switch_start(switch.sel)
 
             with self._line.indent():
                 for case in switch.cases:
@@ -236,9 +240,18 @@ class Module(rtlil.Module):
         self._signals[signal.name] = signal
 
     def _emit_memory(self, memory: Memory):
-        memory.build()
+        processes, connections, signals = memory.build(self.wire)
 
-    def _emit_module_and_ports(self, ports: list["rtlil.Wire"]):
+        for clk, process in processes:
+            kwargs = {}
+            if clk is not None:
+                kwargs.update({'comb': False, 'clock': clk})
+            self._emitted_processes.append((process, kwargs))
+
+        self.connections.extend(connections)
+        self._emitted_signals.extend(signals)
+
+    def _emit_module_and_ports(self, ports: list[rtlil.Wire]):
         pass
 
     def _emit_flip_flop(self, flip_flop: rtlil.Cell):
@@ -303,6 +316,13 @@ class Module(rtlil.Module):
         if isinstance(signal, _ast.Const):
             return [] if raw else [self._const_repr(signal.width, signal.value)]
 
+        if isinstance(signal, MemoryIndex):
+            indexed_mem = self._get_mem_slice(signal)
+            if raw or signal.slice is None:
+                return [indexed_mem]
+            else:
+                return [self._get_slice(indexed_mem, signal.slice.start, signal.slice.stop - 1)]
+
         const_pattern = re.compile(r"(\d+)'([\d|-]+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
 
@@ -360,9 +380,13 @@ class Module(rtlil.Module):
         return real_parts
 
     @classmethod
-    def _concat(cls, parts):
+    def _concat(cls, parts) -> str:
         return str(parts)
 
     @classmethod
-    def _get_slice(cls, name: str, start: int, stop: int):
+    def _get_slice(cls, name: str, start: int, stop: int) -> str:
         return ''
+
+    @classmethod
+    def _get_mem_slice(cls, idx: MemoryIndex):
+        return cls._get_slice(idx.name, idx.address, idx.address)
