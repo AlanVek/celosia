@@ -6,6 +6,33 @@ import re
 
 # TODO: Tap into rtlil.ModuleEmitter so we can have control over Wire names
 
+class Memory:
+    def __init__(self, name: str, memory: rtlil.Memory):
+        self.name = name
+        self.memory = memory
+        self.cell: rtlil.Cell = None
+        self.wps: list[rtlil.Cell] = []
+        self.rps: list[rtlil.Cell] = []
+
+    def set_cell(self, cell: rtlil.Cell):
+        if self.cell is not None:
+            raise RuntimeError(f"Trying to reset Memory cell for {self.memory.name}")
+        self.cell = cell
+
+    def add_wp(self, wp: rtlil.Cell):
+        self.wps.append(wp)
+
+    def add_rp(self, rp: rtlil.Cell):
+        self.rps.append(rp)
+
+    @property
+    def depth(self) -> int:
+        return self.cell.parameters.get('WORDS', None)
+
+    @property
+    def width(self) -> int:
+        return self.cell.parameters.get('WIDTH', None)
+
 class Module(rtlil.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -17,7 +44,7 @@ class Module(rtlil.Module):
         self._emitted_processes: list[rtlil.Process] = []
         self._emitted_submodules: list[rtlil.Cell] = []
         self._emitted_signals: list[rtlil.Wire] = []
-        self._emitted_memories: list[rtlil.Memory] = []
+        self._emitted_memories: dict[str, Memory] = {}
         self._emitted_operators: list[rtlil.Cell] = []
         self._emitted_flip_flops: list[rtlil.Cell] = []
 
@@ -46,6 +73,8 @@ class Module(rtlil.Module):
 
         for name, cell in self.contents.items():
             destination = None
+            ignore = False
+
             if isinstance(cell, rtlil.Wire):
                 if cell.port_kind is None:
                     destination = self._emitted_signals
@@ -58,22 +87,32 @@ class Module(rtlil.Module):
                     destination = self._emitted_submodules
                 elif self._cell_is_ff(cell):
                     destination = self._emitted_flip_flops
+                elif self._cell_is_memory(cell):
+                    self._get_memory_from_port(cell).set_cell(cell)
+                    ignore = True
+                elif self._cell_is_memory_wp(cell):
+                    self._get_memory_from_port(cell).add_wp(cell)
+                    ignore = True
+                elif self._cell_is_memory_rp(cell):
+                    self._get_memory_from_port(cell).add_rp(cell)
+                    ignore = True
                 elif self._cell_is_yosys(cell):
                     destination = self._emitted_operators
             elif isinstance(cell, rtlil.Memory):
-                destination = self._emitted_memories
+                self._emitted_memories[cell.name] = Memory(cell.name, cell)
+                ignore = True
 
-            if destination is None:
-                raise RuntimeError(f"Unknown cell type named {name}: {type(cell)}")
-
-            destination.append(cell)
+            if not ignore:
+                if destination is None:
+                    raise RuntimeError(f"Unknown cell type named {name}: {type(cell)}")
+                destination.append(cell)
 
         self._emit_module_and_ports(self._emitted_ports)
 
         for signal in self._emitted_signals:
             self._emit_signal(signal)
 
-        for memory in self._emitted_memories:
+        for memory in self._emitted_memories.values():
             self._emit_memory(memory)
 
         for flip_flop in self._emitted_flip_flops:
@@ -104,6 +143,29 @@ class Module(rtlil.Module):
     @classmethod
     def _cell_is_ff(cls, cell: rtlil.Cell):
         return cls._cell_is_yosys(cell) and cell.kind in ('$dff', '$adff')
+
+    @classmethod
+    def _cell_is_memory(cls, cell: rtlil.Cell):
+        return cls._cell_is_yosys(cell) and cell.kind == '$meminit_v2'
+
+    @classmethod
+    def _cell_is_memory_wp(cls, cell: rtlil.Cell):
+        return cls._cell_is_yosys(cell) and cell.kind == '$memwr_v2'
+
+    @classmethod
+    def _cell_is_memory_rp(cls, cell: rtlil.Cell):
+        return cls._cell_is_yosys(cell) and cell.kind == '$memrd_v2'
+
+    def _get_memory_from_port(self, port: rtlil.Cell) -> Memory:
+        memid = port.parameters.get('MEMID', None)
+        if memid is None:
+            raise RuntimeError(f"MemoryPort {port.name} missing MEMID")
+
+        mem = self._emitted_memories.get(memid, None)
+        if mem is None:
+            raise RuntimeError(f"Unknown MEMID for MemoryPort {port.name}")
+
+        return mem
 
     def _new_process(self) -> str:
         ret = f'process_{self._process_id}'
@@ -210,7 +272,7 @@ class Module(rtlil.Module):
         print('Emit signal:', signal.name, signal.width)
         pass
 
-    def _emit_memory(self, memory: rtlil.Memory):
+    def _emit_memory(self, memory: Memory):
         print('Emit memory:', memory.name, memory.depth, memory.width)
         pass
 

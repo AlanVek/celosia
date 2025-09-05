@@ -1,7 +1,6 @@
-from celosia.hdl.backend import Module as BaseModule
+from celosia.hdl.backend import Module as BaseModule, Memory
 from typing import Any, Union
 from amaranth.back import rtlil
-import re
 
 class VerilogModule(BaseModule):
 
@@ -135,27 +134,16 @@ class VerilogModule(BaseModule):
             type = 'reg' if self._signal_is_reg(signal) else 'wire'
             init = self._get_initial(signal)
 
-            if signal.width <= 1:
-                width = ''
-            else:
-                width = f'[{signal.width - 1}:0] '
-
-            if signal.port_kind is None:
-                dir = ''
-            else:
-                dir = f'{signal.port_kind} '
-
-            if init is None:
-                reset = ''
-            else:
-                reset = f' = {init}'
+            width = '' if signal.width <= 1 else f'[{signal.width - 1}:0] '
+            dir = '' if signal.port_kind is None else f'{signal.port_kind} '
+            reset = '' if init is None else f' = {init}'
 
             for key, attr in signal.attributes.items():
                 self._line(f'(* {key} = {self._const(attr)} *)')
 
             self._line(f'{dir}{type} {width}{signal.name}{reset};')
 
-    def _emit_memory(self, memory: rtlil.Memory):
+    def _emit_memory(self, memory: Memory):
         print('Emit memory:', memory.name, memory.depth, memory.width)
         pass
 
