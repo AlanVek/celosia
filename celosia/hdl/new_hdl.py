@@ -1,5 +1,4 @@
-from textwrap import indent
-from amaranth.hdl import _ast, _ir, _nir
+from amaranth.hdl import _ir
 from typing import Union, Any
 import importlib
 import pkgutil
@@ -16,18 +15,12 @@ class HDLExtensions(type):
         return self.extensions[0]
 
 class HDL(metaclass=HDLExtensions):
-    case_sensitive = False
-    portsep = ','
-    top_first = True
+    ModuleClass = Module
 
+    case_sensitive = False
+    top_first = True
     open_comment = ''
     close_comment = ''
-
-    template = """{name}
-{ports}{initials}{submodules}{blocks}{assignments}
-"""
-
-    ModuleClass = Module
 
     def __init__(self, spaces: int = 4):
         self.spaces = spaces

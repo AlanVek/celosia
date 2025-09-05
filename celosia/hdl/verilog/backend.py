@@ -228,39 +228,8 @@ class VerilogModule(BaseModule):
     def _emit_module_end(self):
         self._line('endmodule')
 
-    def _get_raw_signals(self, signal: str) -> set[str]:
-        ret = set()
-
-        if signal is None:
-            return ret
-
-        slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
-
-        if signal.startswith('{') and signal.endswith('}'):
-            signal = signal[1:-1].strip()
-
-        while signal:
-            slice_match = slice_pattern.match(signal)
-            if slice_match is not None:
-                name = slice_match.group(1)
-                ret.add(name)
-                signal = signal[slice_match.end() + 1:]
-                continue
-
-            space_idx = signal.find(' ')
-            if space_idx < 0:
-                space_idx = len(signal)
-                ret.add(signal)
-            else:
-                ret.add(signal[:space_idx])
-
-            signal = signal[space_idx + 1:]
-
-        return ret
-
     def _collect_lhs(self, assignment: Union[rtlil.Assignment, rtlil.Switch, rtlil.Case]) -> set[str]:
         ret = set()
-
 
         # TODO: We can probably break early if LHS is never a concatenation
         if isinstance(assignment, rtlil.Assignment):

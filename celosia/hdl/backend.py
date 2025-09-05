@@ -279,11 +279,17 @@ class Module(rtlil.Module):
         return ''
 
     def _get_signal_name(self, signal: Union[str, _ast.Const]) -> str:
+        return self._collect_signals(signal, raw=False)
+
+    def _get_raw_signals(self, signal: Union[str, _ast.Const]) -> list[str]:
+        return self._collect_signals(signal, raw=True)
+
+    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False) -> Union[str, list[str]]:
         if signal is None:
             return None
 
         if isinstance(signal, _ast.Const):
-            return self._const_repr(signal.width, signal.value)
+            return [] if raw else self._const_repr(signal.width, signal.value)
 
         const_pattern = re.compile(r"(\d+)'([\d|-]+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
@@ -300,7 +306,8 @@ class Module(rtlil.Module):
             const_match = const_pattern.match(signal)
 
             if const_match is not None:
-                real_parts.append(self._const_repr(*const_match.groups()))
+                if not raw:
+                    real_parts.append(self._const_repr(*const_match.groups()))
                 signal = signal[const_match.end() + 1:]
                 continue
 
@@ -308,21 +315,25 @@ class Module(rtlil.Module):
             if slice_match is not None:
                 name = slice_match.group(1)
 
-                wire = self._signals.get(name, None)
-                if wire is None:
-                    raise RuntimeError(f"Unknown signal: {name}")
-
-                index = slice_match.group(2)
-
-                if ':' in index:
-                    stop, start = map(int, index.split(':'))
-                else:
-                    stop = start = int(index)
-
-                if wire.width == stop - start + 1:
+                if raw:
                     real_parts.append(name)
+
                 else:
-                    real_parts.append(f'{self._get_slice(name, start, stop)}')
+                    wire = self._signals.get(name, None)
+                    if wire is None:
+                        raise RuntimeError(f"Unknown signal: {name}")
+
+                    index = slice_match.group(2)
+
+                    if ':' in index:
+                        stop, start = map(int, index.split(':'))
+                    else:
+                        stop = start = int(index)
+
+                    if wire.width == stop - start + 1:
+                        real_parts.append(name)
+                    else:
+                        real_parts.append(f'{self._get_slice(name, start, stop)}')
 
                 signal = signal[slice_match.end() + 1:]
                 continue
@@ -330,13 +341,13 @@ class Module(rtlil.Module):
             space_idx = signal.find(' ')
             if space_idx < 0:
                 space_idx = len(signal)
-                real_parts.append(signal)
-            else:
-                real_parts.append(signal[:space_idx])
 
+            real_parts.append(signal[:space_idx])
             signal = signal[space_idx + 1:]
 
-        if concat:
+        if raw:
+            return real_parts
+        elif concat:
             return self._concat(real_parts)
         else:
             return real_parts[0]

@@ -5,7 +5,6 @@ class Verilog(HDL):
     ModuleClass = VerilogModule
 
     case_sensitive = True
-    portsep = ';'
     top_first = False
     extensions = ['v']
     open_comment = '/* '

@@ -5,7 +5,6 @@ class VHDL(HDL):
     ModuleClass = VHDLModule
 
     case_sensitive = False
-    portsep = ';'
     top_first = False
     extensions = ['vhd', 'vhdl']
     open_comment = '-- '
