@@ -114,11 +114,8 @@ class VerilogModule(BaseModule):
     def _emit_assignment(self, assignment: rtlil.Assignment):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, prefix='assign')
 
-    def _emit_process_assignment(self, assignment: rtlil.Assignment):
-        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
-
-    def _emit_ff_assignment(self, assignment: rtlil.Assignment):
-        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '<=')
+    def _emit_process_assignment(self, assignment: rtlil.Assignment, comb = True):
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=')
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         print('Emit submodule:', submodule.name, submodule.kind)
@@ -143,9 +140,9 @@ class VerilogModule(BaseModule):
 
             self._line(f'{dir}{type} {width}{signal.name}{reset};')
 
-    def _emit_memory(self, memory: Memory):
-        print('Emit memory:', memory.name, memory.depth, memory.width)
-        pass
+    # def _emit_memory(self, memory: Memory):
+    #     print('Emit memory:', memory.name, memory.depth, memory.width)
+    #     pass
 
     def _emit_module_and_ports(self, ports: list["rtlil.Wire"]):
         self._collect_process_signals(self._emitted_processes)
@@ -159,32 +156,25 @@ class VerilogModule(BaseModule):
         for i, port in enumerate(ports):
             self._emit_signal(port)
 
-    def _emit_flip_flop_start(self, clock: str, polarity: bool, arst: str = None, arst_polarity = False) -> str:
-        ret = super()._emit_flip_flop_start(clock, polarity, arst, arst_polarity)
-
-        polarity = 'pos' if polarity else 'neg'
-        arst_polarity = 'pos' if arst_polarity else 'neg'
-        trigger = f'always @ ({polarity}edge {clock}'
-
-        if arst is not None:
-            trigger += f', {arst_polarity}edge {arst}'
-
-        self._line(trigger + ') begin')
-
-        return ret
-
-    def _emit_flip_flop_end(self, ff_id: str):
-        self._line('end')
-
     def _signal_is_reg(self, signal: rtlil.Wire):
         return 'init' in signal.attributes or signal.name in self._regs
 
-    def _emit_process_start(self) -> str:
-        ret = super()._emit_process_start()
-        self._line('always @* begin')
+    def _emit_process_start(self, clock: str = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
+        ret = super()._emit_process_start(clock, polarity, arst, arst_polarity)
+
+        if clock is None:
+            trigger = '*'
+        else:
+            trigger = f'({"pos" if polarity else "neg"}edge {clock}'
+            if arst is not None:
+                trigger += f', {"pos" if arst_polarity else "neg"}edge {arst}'
+            trigger += ')'
+
+        self._line(f'always @ {trigger} begin')
+
         return ret
 
-    def _emit_process_end(self, p_id: str):
+    def _emit_process_end(self, p_id: str, comb=True):
         self._line('end')
 
     @classmethod
@@ -221,7 +211,6 @@ class VerilogModule(BaseModule):
 
         # TODO: We can probably break early if LHS is never a concatenation
         if isinstance(assignment, rtlil.Assignment):
-            print('Collect:', assignment.lhs, self._get_raw_signals(assignment.lhs))
             ret.update(self._get_raw_signals(assignment.lhs))
 
         elif isinstance(assignment, rtlil.Switch):
@@ -238,3 +227,11 @@ class VerilogModule(BaseModule):
         for process in processes:
             for content in process.contents:
                 self._regs.update(self._collect_lhs(content))
+
+    def _emit_operator(self, operator: rtlil.Cell):
+        print('Operator:', operator.kind, 'Ports:', operator.ports)
+        with self._line.indent():
+            operands = [self._get_signal_name(operator.ports['A'])]
+            if 'B' in operator.ports:
+                operands.append(self._get_signal_name(operator.ports['B']))
+            self._line(f'assign {self._get_signal_name(operator.ports["Y"])} = {f" {operator.kind} ".join(operands)};')

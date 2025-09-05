@@ -1,37 +1,11 @@
 from amaranth.back import rtlil
 from amaranth.back.rtlil import _const
+from celosia.hdl.memory import Memory
 from typing import Any, Union
 from amaranth.hdl import _ast
 import re
 
 # TODO: Tap into rtlil.ModuleEmitter so we can have control over Wire names
-
-class Memory:
-    def __init__(self, name: str, memory: rtlil.Memory):
-        self.name = name
-        self.memory = memory
-        self.cell: rtlil.Cell = None
-        self.wps: list[rtlil.Cell] = []
-        self.rps: list[rtlil.Cell] = []
-
-    def set_cell(self, cell: rtlil.Cell):
-        if self.cell is not None:
-            raise RuntimeError(f"Trying to reset Memory cell for {self.memory.name}")
-        self.cell = cell
-
-    def add_wp(self, wp: rtlil.Cell):
-        self.wps.append(wp)
-
-    def add_rp(self, rp: rtlil.Cell):
-        self.rps.append(rp)
-
-    @property
-    def depth(self) -> int:
-        return self.cell.parameters.get('WORDS', None)
-
-    @property
-    def width(self) -> int:
-        return self.cell.parameters.get('WIDTH', None)
 
 class Module(rtlil.Module):
     def __init__(self, *args, **kwargs):
@@ -99,7 +73,7 @@ class Module(rtlil.Module):
                 elif self._cell_is_yosys(cell):
                     destination = self._emitted_operators
             elif isinstance(cell, rtlil.Memory):
-                self._emitted_memories[cell.name] = Memory(cell.name, cell)
+                self._emitted_memories[cell.name] = Memory(cell.name, cell, self._signals, self._collect_signals)
                 ignore = True
 
             if not ignore:
@@ -172,22 +146,22 @@ class Module(rtlil.Module):
         self._process_id += 1
         return ret
 
-    def _emit_process(self, process: rtlil.Process):
+    def _emit_process(self, process: rtlil.Process, comb = True, **kwargs):
         with self._line.indent():
-            p_id = self._emit_process_start()
+            p_id = self._emit_process_start(**kwargs)
 
             with self._line.indent():
-                self._emit_process_contents(process.contents)
+                self._emit_process_contents(process.contents, comb=comb)
 
-            self._emit_process_end(p_id)
+            self._emit_process_end(p_id, comb=comb)
 
-    def _emit_process_start(self) -> str:
+    def _emit_process_start(self, clock: str = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
         return self._new_process()
 
-    def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]]):
+    def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]], comb=True):
         index = 0
         while index < len(contents) and isinstance(contents[index], rtlil.Assignment):
-            self._emit_process_assignment(contents[index])
+            self._emit_process_assignment(contents[index], comb=comb)
             index += 1
         while index < len(contents):
             if isinstance(contents[index], rtlil.Assignment):
@@ -202,50 +176,41 @@ class Module(rtlil.Module):
                 #             index += 1
                 # emit(f"end")
             else:
-                self._emit_switch(contents[index])
+                self._emit_switch(contents[index], comb=comb)
                 index += 1
 
-    def _emit_process_end(self, p_id: str):
+    def _emit_process_end(self, p_id: str, comb = True):
         pass
 
     def _emit_assignment(self, assignment: rtlil.Assignment):
         pass
 
-    def _emit_process_assignment(self, assignment: rtlil.Assignment):
+    def _emit_process_assignment(self, assignment: rtlil.Assignment, comb = True):
         pass
 
-    def _emit_ff_assignment(self, assignment: rtlil.Assignment):
-        pass
-
-    def _emit_switch(self, switch: rtlil.Switch):
+    def _emit_switch(self, switch: rtlil.Switch, comb=True):
         with self._line.indent():
             self._emit_switch_start(self._get_signal_name(switch.sel))
 
             with self._line.indent():
-                self._emit_switch_contents(switch.sel, switch.cases)
+                for case in switch.cases:
+                    if case.patterns:
+                        pattern = self._case_patterns((self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
+                    else:
+                        pattern = self._case_default()
+
+                    self._emit_case_start(pattern)
+                    with self._line.indent():
+                        self._emit_process_contents(case.contents, comb=comb)
+                    self._emit_case_end()
 
             self._emit_switch_end()
 
     def _emit_switch_start(self, sel: str):
         pass
 
-    def _emit_switch_contents(self, sel: str, cases: list[rtlil.Case]):
-        for case in cases:
-            self._emit_case(case)
-
     def _emit_switch_end(self):
         pass
-
-    def _emit_case(self, case: rtlil.Case):
-        if case.patterns:
-            pattern = self._case_patterns((self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
-        else:
-            pattern = self._case_default()
-
-        self._emit_case_start(pattern)
-        with self._line.indent():
-            self._emit_process_contents(case.contents)
-        self._emit_case_end()
 
     def _case_patterns(self, pattern: tuple[str, ...]) -> str:
         return ''
@@ -269,59 +234,40 @@ class Module(rtlil.Module):
 
     def _emit_signal(self, signal: rtlil.Wire):
         self._signals[signal.name] = signal
-        print('Emit signal:', signal.name, signal.width)
-        pass
 
     def _emit_memory(self, memory: Memory):
-        print('Emit memory:', memory.name, memory.depth, memory.width)
-        pass
+        memory.build()
 
     def _emit_module_and_ports(self, ports: list["rtlil.Wire"]):
-        print('Emit ports:', {port.name: port.width for port in ports})
         pass
 
     def _emit_flip_flop(self, flip_flop: rtlil.Cell):
         arst_value = self._get_signal_name(flip_flop.parameters.get('ARST_VALUE', None))
         arst_polarity = flip_flop.parameters.get('ARST_POLARITY', True)
         arst = self._get_signal_name(flip_flop.ports.get('ARST', None))
+        data = self._get_signal_name(flip_flop.ports['D'])
+        out = self._get_signal_name(flip_flop.ports['Q'])
 
-        with self._line.indent():
-            ff_id = self._emit_flip_flop_start(
-                clock = self._get_signal_name(flip_flop.ports['CLK']),
-                polarity = flip_flop.parameters['CLK_POLARITY'],
-                arst = arst,
-                arst_polarity = arst_polarity,
-            )
+        process = rtlil.Process(name=None)
 
-            with self._line.indent():
-                self._emit_flip_flop_contents(
-                    data = self._get_signal_name(flip_flop.ports['D']),
-                    out = self._get_signal_name(flip_flop.ports['Q']),
-                    arst = arst,
-                    arst_polarity = arst_polarity,
-                    arst_value = arst_value,
-                )
-
-            self._emit_flip_flop_end(ff_id)
-
-    def _emit_flip_flop_start(self, clock: str, polarity: bool, arst: str = None, arst_polarity = False) -> str:
-        return self._new_process()
-
-    def _emit_flip_flop_contents(self, data: str, out: str, arst: str = None, arst_polarity = False, arst_value: str = None):
         if arst is None:
-            self._emit_ff_assignment(rtlil.Assignment(out, data))
+            process.assign(out, data)
         else:
             if arst_value is None:
                 raise RuntimeError("Missing arst value for async reset")
 
-            switch = rtlil.Switch(arst)   # TODO: Check negated? Or not worth it?
+            switch = process.switch(arst)
             switch.case(['1' if arst_polarity else '0']).assign(out, arst_value)
             switch.default().assign(out, data)
 
-            self._emit_switch(switch)
-
-    def _emit_flip_flop_end(self, ff_id: str):
-        pass
+        self._emit_process(
+            process,
+            comb = False,
+            clock = self._get_signal_name(flip_flop.ports['CLK']),
+            polarity = flip_flop.parameters['CLK_POLARITY'],
+            arst = arst,
+            arst_polarity = arst_polarity,
+        )
 
     def _emit_module_end(self):
         pass
@@ -341,17 +287,21 @@ class Module(rtlil.Module):
         return ''
 
     def _get_signal_name(self, signal: Union[str, _ast.Const]) -> str:
-        return self._collect_signals(signal, raw=False)
+        ret = self._collect_signals(signal, raw=False)
+        if len(ret) == 1:
+            return ret[0]
+        else:
+            return self._concat(ret)
 
     def _get_raw_signals(self, signal: Union[str, _ast.Const]) -> list[str]:
         return self._collect_signals(signal, raw=True)
 
-    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False) -> Union[str, list[str]]:
+    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False) -> list[str]:
         if signal is None:
             return None
 
         if isinstance(signal, _ast.Const):
-            return [] if raw else self._const_repr(signal.width, signal.value)
+            return [] if raw else [self._const_repr(signal.width, signal.value)]
 
         const_pattern = re.compile(r"(\d+)'([\d|-]+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
@@ -407,12 +357,7 @@ class Module(rtlil.Module):
             real_parts.append(signal[:space_idx])
             signal = signal[space_idx + 1:]
 
-        if raw:
-            return real_parts
-        elif concat:
-            return self._concat(real_parts)
-        else:
-            return real_parts[0]
+        return real_parts
 
     @classmethod
     def _concat(cls, parts):
