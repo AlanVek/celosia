@@ -133,12 +133,21 @@ class VerilogModule(BaseModule):
 
             width = '' if signal.width <= 1 else f'[{signal.width - 1}:0] '
             dir = '' if signal.port_kind is None else f'{signal.port_kind} '
-            reset = '' if init is None else f' = {init}'
+            depth = len(init) if isinstance(init, list) else 0
 
             for key, attr in signal.attributes.items():
                 self._line(f'(* {key} = {self._const(attr)} *)')
 
-            self._line(f'{dir}{type} {width}{signal.name}{reset};')
+            if depth:
+                self._line(f'{dir}{type} {width}{signal.name} [{depth-1}:0];')
+                self._line('initial begin')
+                with self._line.indent():
+                    for i, value in enumerate(init):
+                        self._emit_assignment_lhs_rhs(self._get_slice(signal.name, i, i), value)
+                self._line('end')
+            else:
+                reset = '' if init is None else f' = {init}'
+                self._line(f'{dir}{type} {width}{signal.name}{reset};')
 
     # def _emit_memory(self, memory: Memory):
     #     print('Emit memory:', memory.name, memory.depth, memory.width)

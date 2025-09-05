@@ -74,7 +74,7 @@ class Module(rtlil.Module):
                 elif self._cell_is_yosys(cell):
                     destination = self._emitted_operators
             elif isinstance(cell, rtlil.Memory):
-                self._emitted_memories[cell.name] = Memory(cell.name, cell, self._signals, self._collect_signals)
+                self._emitted_memories[cell.name] = Memory(cell, self._signals)
                 ignore = True
 
             if not ignore:
@@ -240,7 +240,7 @@ class Module(rtlil.Module):
         self._signals[signal.name] = signal
 
     def _emit_memory(self, memory: Memory):
-        processes, connections, signals = memory.build(self.wire)
+        processes, connections, signals = memory.build(self._collect_signals, self.wire)
 
         for clk, process in processes:
             kwargs = {}
@@ -250,6 +250,7 @@ class Module(rtlil.Module):
 
         self.connections.extend(connections)
         self._emitted_signals.extend(signals)
+        self._emitted_signals.append(memory)
 
     def _emit_module_and_ports(self, ports: list[rtlil.Wire]):
         pass
@@ -289,10 +290,13 @@ class Module(rtlil.Module):
         for lhs, rhs in self.connections:
             self._emit_assignment(rtlil.Assignment(lhs, rhs))
 
-    def _get_initial(self, signal: rtlil.Wire) -> str:
-        ret: _ast.Const = signal.attributes.pop('init', None)
+    def _get_initial(self, signal: rtlil.Wire) -> Union[str, list[str]]:
+        ret: Union[_ast.Const, list[_ast.Const]] = signal.attributes.pop('init', None)
         if ret is not None:
-            ret = self._const_repr(ret.width, ret.value)
+            if isinstance(ret, list):
+                ret = [self._const_repr(r.width, r.value) for r in ret]
+            else:
+                ret = self._const_repr(ret.width, ret.value)
         return ret
 
     @staticmethod
