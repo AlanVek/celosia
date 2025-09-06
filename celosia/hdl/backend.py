@@ -41,55 +41,50 @@ class Module(rtlil.Module):
             ret = ret[1:]
         return ret
 
+    def wire(self, *args, **kwargs):
+        wire = super().wire(*args, **kwargs)
+        self._signals[wire.name] = wire
+        if wire.port_kind is not None:
+            self._emitted_ports.append(wire)
+        return wire
+
+    def process(self, *args, **kwargs):
+        process = super().process(*args, **kwargs)
+        self._emitted_processes.append((process, {}))
+        return process
+
+    def cell(self, *args, **kwargs):
+        cell = super().cell(*args, **kwargs)
+        if self._cell_is_submodule(cell):
+            self._emitted_submodules.append(cell)
+        elif self._cell_is_ff(cell):
+            self._emitted_flip_flops.append(cell)
+        elif self._cell_is_memory(cell):
+            self._get_memory_from_port(cell).set_cell(cell)
+        elif self._cell_is_memory_wp(cell):
+            self._get_memory_from_port(cell).add_wp(cell)
+        elif self._cell_is_memory_rp(cell):
+            self._get_memory_from_port(cell).add_rp(cell)
+        # elif self._cell_is_yosys(cell):
+        else:
+            self._emitted_operators.append(cell)
+        return cell
+
+    def memory(self, *args, **kwargs):
+        memory = super().memory(*args, **kwargs)
+        self._emitted_memories[memory.name] = self._signals[memory.name] = Memory(memory)
+        return memory
+
     def emit(self, line: rtlil.Emitter):
         self._line = line
-
         line.port_id = 0
-
-        for name, cell in self.contents.items():
-            destination = None
-            ignore = False
-
-            if isinstance(cell, rtlil.Wire):
-                self._signals[cell.name] = cell
-                if cell.port_kind is None:
-                    ignore = True
-                else:
-                    destination = self._emitted_ports
-            elif isinstance(cell, rtlil.Process):
-                cell = (cell, {})
-                destination = self._emitted_processes
-            elif isinstance(cell, rtlil.Cell):
-                if self._cell_is_submodule(cell):
-                    destination = self._emitted_submodules
-                elif self._cell_is_ff(cell):
-                    destination = self._emitted_flip_flops
-                elif self._cell_is_memory(cell):
-                    self._get_memory_from_port(cell).set_cell(cell)
-                    ignore = True
-                elif self._cell_is_memory_wp(cell):
-                    self._get_memory_from_port(cell).add_wp(cell)
-                    ignore = True
-                elif self._cell_is_memory_rp(cell):
-                    self._get_memory_from_port(cell).add_rp(cell)
-                    ignore = True
-                elif self._cell_is_yosys(cell):
-                    destination = self._emitted_operators
-            elif isinstance(cell, rtlil.Memory):
-                self._emitted_memories[cell.name] = Memory(cell, self._signals)
-                ignore = True
-
-            if not ignore:
-                if destination is None:
-                    raise RuntimeError(f"Unknown cell type named {name}: {type(cell)}")
-                destination.append(cell)
 
         # Memories need to go first because they may create new signals, processes and connections
         for memory in self._emitted_memories.values():
             self._emit_memory(memory)
 
-        # After this point, no new signals are created
-        # We have this callback so submodules can gather all the information they need from signals
+        # After this point, no new signals, processes or connections are created
+        # We have this callback so subclasses can gather all the information they may need before starting
         self._emit_pre_callback()
 
         self._emit_module_definition()
@@ -198,7 +193,33 @@ class Module(rtlil.Module):
     def _emit_process_assignment(self, assignment: rtlil.Assignment, comb = True):
         pass
 
+    @classmethod
+    def _is_switch_if(cls, switch: rtlil.Switch) -> bool:
+        used_idx: set[int] = set()
+        for case in switch.cases:
+            if not case.patterns:
+                break
+
+            if len(case.patterns) > 1:
+                return False
+
+            pattern: str = case.patterns[0]
+            if pattern.count('1') != 1 or not all(c in ('-', '1') for c in pattern):
+                return False
+
+            bit = pattern.index('1')
+            if bit in used_idx:
+                return False
+
+            used_idx.add(bit)
+
+        return True
+
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
+        if self._is_switch_if(switch):
+            # return self._emit_if(switch, comb=comb)
+            pass
+
         # TODO: Handle operators (mostly for memory transparency, maybe it can be a special case)
         # self._emit_switch_start(self._get_signal_name(switch.sel))
         self._emit_switch_start(switch.sel)
@@ -216,6 +237,9 @@ class Module(rtlil.Module):
                 self._emit_case_end()
 
         self._emit_switch_end()
+
+    def _emit_if(self, switch: rtlil.Switch, comb=True):
+        pass
 
     def _emit_switch_start(self, sel: str):
         pass
@@ -247,7 +271,7 @@ class Module(rtlil.Module):
         pass
 
     def _emit_memory(self, memory: Memory):
-        processes, connections, signals = memory.build(self._collect_signals, self.wire)
+        processes, connections = memory.build(self._signals, self._collect_signals, self.wire)
 
         for clk, process in processes:
             kwargs = {}
@@ -256,9 +280,6 @@ class Module(rtlil.Module):
             self._emitted_processes.append((process, kwargs))
 
         self.connections.extend(connections)
-        for signal in signals:
-            self._signals[signal.name] = signal
-        self._signals[memory.name] = memory
 
     def _emit_module_definition(self):
         pass
