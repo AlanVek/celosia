@@ -121,7 +121,7 @@ class VerilogModule(BaseModule):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=')
 
     def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
-        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=', parse=False)
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=', parse=False, prefix='assign')
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         super()._emit_submodule(submodule)
@@ -267,6 +267,7 @@ class VerilogModule(BaseModule):
                 self._regs.update(self._collect_lhs(content))
 
     def _operator_rhs(self, operator: rtlil.Cell) -> str:
+        # TODO: Any issues with constant unary?
         UNARY_OPERATORS = {
             "$neg": "-",
             "$not": "!",

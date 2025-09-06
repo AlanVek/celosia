@@ -308,7 +308,7 @@ class Module(rtlil.Module):
         submodule.name = self._sanitize(submodule.name)
         submodule.kind = self._sanitize(submodule.kind)
 
-    def _emit_operator(self, operator: rtlil.Cell, comb=False):
+    def _emit_operator(self, operator: rtlil.Cell, comb=True):
         lhs = self._get_signal_name(operator.ports.get('Y', None))
         rhs = self._operator_rhs(operator)
 
