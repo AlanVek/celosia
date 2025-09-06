@@ -130,7 +130,21 @@ class ReadPort:
                                     'A': wp.addr,
                                     'B': addr,
                                 },
+                                parameters = {
+                                    'A_SIGNED': False,
+                                    'A_WIDTH': wp.cell.parameters['ABITS'],
+                                    'B_SIGNED': False,
+                                    'B_WIDTH': self.cell.parameters['ABITS'],
+                                    'Y_WIDTH': 1,
+                                }
                             ),
+                        },
+                        parameters = {
+                            'A_SIGNED': False,
+                            'A_WIDTH': 1,
+                            'B_SIGNED': False,
+                            'B_WIDTH': 1,
+                            'Y_WIDTH': 1,
                         },
                     )
 

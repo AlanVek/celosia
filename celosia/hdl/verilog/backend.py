@@ -253,11 +253,113 @@ class VerilogModule(BaseModule):
                 self._regs.update(self._collect_lhs(content))
 
     def _operator_rhs(self, operator: rtlil.Cell) -> str:
-        operands = [self._get_signal_name(operator.ports['A'])]
-        if 'B' in operator.ports:
-            operands.append(self._get_signal_name(operator.ports['B']))
+        UNARY_OPERATORS = {
+            "$neg",
+            "$not",
+            "$reduce_bool",
+            "$reduce_or",
+            "$reduce_and",
+            "$reduce_xor",
+        }
+        BINARY_OPERATORS = {
+            "$add",
+            "$sub",
+            "$mul",
+            "$divfloor",
+            "$modfloor",
+            "$shl",
+            "$shr",
+            "$sshr",
+            "$and",
+            "$or",
+            "$xor",
+            "$eq",
+            "$ne",
+            "$lt",
+            "$gt",
+            "$le",
+            "$ge",
+        }
 
-        if len(operands) == 1:
-            return f'{operator.kind} {operands[0]}'
-        else:
-            return f' {operator.kind} '.join(operands)
+        TERNARY_OPERATORS = {
+            '$mux',
+        }
+
+        rhs = None
+
+        if operator.kind in UNARY_OPERATORS:
+            operand = self._get_signal_name(operator.ports['A'])
+            if operator.parameters['A_SIGNED']:
+                operand = f'$signed({operand})'
+
+            if operator.kind == "$neg":
+                rhs = f'- {operand}'
+            elif operator.kind == "$not":
+                rhs = f'! {operand}'
+            elif operator.kind == '$reduce_bool':
+                rhs = f'{operand} != {self._const_repr(operator.parameters["A_WIDTH"], 0)}'
+            elif operator.kind == '$reduce_or':
+                rhs = f'| {operand}'
+            elif operator.kind == '$reduce_and':
+                rhs = f'& {operand}'
+            elif operator.kind == '$reduce_xor':
+                rhs = f'^ {operand}'
+
+        elif operator.kind in BINARY_OPERATORS:
+            operands = []
+            for port in ('A', 'B'):
+                operand = self._get_signal_name(operator.ports[port])
+                if operator.parameters[f'{port}_SIGNED']:
+                    operand = f'$signed({operand})'
+                operands.append(operand)
+
+            symbol = None
+            if operator.kind == "$add":
+                symbol = '+'
+            elif operator.kind == "$sub":
+                symbol = '-'
+            elif operator.kind == "$mul":
+                symbol = '*'
+            elif operator.kind == "$divfloor":
+                symbol = '/'
+            elif operator.kind == "$modfloor":
+                symbol = '%'
+            elif operator.kind == "$shl":
+                symbol = '<<'
+            elif operator.kind == "$shr":
+                symbol = '>>'
+            elif operator.kind == "$sshr":
+                symbol = '>>' # TODO: Check sign?
+            elif operator.kind == "$and":
+                symbol = '&'
+            elif operator.kind == "$or":
+                symbol = '|'
+            elif operator.kind == "$xor":
+                symbol = '^'
+            elif operator.kind == "$eq":
+                symbol = '=='
+            elif operator.kind == "$ne":
+                symbol = '!='
+            elif operator.kind == "$lt":
+                symbol = '<'
+            elif operator.kind == "$gt":
+                symbol = '>'
+            elif operator.kind == "$le":
+                symbol = '<='
+            elif operator.kind == "$ge":
+                symbol = '>='
+
+            if symbol is not None:
+                rhs = f' {symbol} '.join(operands)
+
+        elif operator.kind in TERNARY_OPERATORS:
+            operands = []
+            for port in ('S', 'B', 'A'):
+                operands.append(self._get_signal_name(operator.ports[port]))
+            if operator.kind == '$mux':
+                rhs = f'{operands[0]} ? {operands[1]} : {operands[2]}'
+
+        if rhs is None:
+            raise RuntimeError(f"Unknown operator: {operator.kind}")
+
+        return rhs
