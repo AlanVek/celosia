@@ -108,8 +108,7 @@ class VerilogModule(BaseModule):
         elif prefix:
             prefix += ' '
 
-        with self._line.indent():
-            self._line(f'{prefix}{self._get_signal_name(lhs)} {symbol} {self._get_signal_name(rhs)};')
+        self._line(f'{prefix}{self._get_signal_name(lhs)} {symbol} {self._get_signal_name(rhs)};')
 
     def _emit_assignment(self, assignment: rtlil.Assignment):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, prefix='assign')

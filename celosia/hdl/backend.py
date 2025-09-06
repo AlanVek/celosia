@@ -199,24 +199,23 @@ class Module(rtlil.Module):
         pass
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
+        # TODO: Handle operators (mostly for memory transparency, maybe it can be a special case)
+        # self._emit_switch_start(self._get_signal_name(switch.sel))
+        self._emit_switch_start(switch.sel)
+
         with self._line.indent():
-            # TODO: Handle operators (mostly for memory transparency, maybe it can be a special case)
-            # self._emit_switch_start(self._get_signal_name(switch.sel))
-            self._emit_switch_start(switch.sel)
+            for case in switch.cases:
+                if case.patterns:
+                    pattern = self._case_patterns((self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
+                else:
+                    pattern = self._case_default()
 
-            with self._line.indent():
-                for case in switch.cases:
-                    if case.patterns:
-                        pattern = self._case_patterns((self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
-                    else:
-                        pattern = self._case_default()
+                self._emit_case_start(pattern)
+                with self._line.indent():
+                    self._emit_process_contents(case.contents, comb=comb)
+                self._emit_case_end()
 
-                    self._emit_case_start(pattern)
-                    with self._line.indent():
-                        self._emit_process_contents(case.contents, comb=comb)
-                    self._emit_case_end()
-
-            self._emit_switch_end()
+        self._emit_switch_end()
 
     def _emit_switch_start(self, sel: str):
         pass
@@ -296,8 +295,9 @@ class Module(rtlil.Module):
         pass
 
     def _emit_connections(self):
-        for lhs, rhs in self.connections:
-            self._emit_assignment(rtlil.Assignment(lhs, rhs))
+        with self._line.indent():
+            for lhs, rhs in self.connections:
+                self._emit_assignment(rtlil.Assignment(lhs, rhs))
 
     def _get_initial(self, signal: rtlil.Wire) -> Union[str, list[str]]:
         ret: Union[_ast.Const, list[_ast.Const]] = signal.attributes.pop('init', None)
