@@ -117,7 +117,22 @@ class ReadPort:
                     else:
                         index = f' [{start_idx+chunk_width-1}:{start_idx}]'
 
-                    sel = f'{en} && ({wp.addr} == {addr})'  # WIP: AND and CMP must be generic
+                    # en && (wp.addr == addr)
+                    sel = rtlil.Cell(
+                        '$and',
+                        name = None,
+                        ports = {
+                            'A': en,
+                            'B': rtlil.Cell(
+                                '$eq',
+                                name = None,
+                                ports = {
+                                    'A': wp.addr,
+                                    'B': addr,
+                                },
+                            ),
+                        },
+                    )
 
                     assigner.switch(sel).case(['1']).assign(f'{self.proxy.name}{index}', f'{wp.data}{index}')
                     start_idx += chunk_width

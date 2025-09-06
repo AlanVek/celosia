@@ -193,6 +193,9 @@ class Module(rtlil.Module):
     def _emit_process_assignment(self, assignment: rtlil.Assignment, comb = True):
         pass
 
+    def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
+        pass
+
     @classmethod
     def _is_switch_if(cls, switch: rtlil.Switch) -> bool:
         used_idx: set[int] = set()
@@ -220,9 +223,7 @@ class Module(rtlil.Module):
             # return self._emit_if(switch, comb=comb)
             pass
 
-        # TODO: Handle operators (mostly for memory transparency, maybe it can be a special case)
-        # self._emit_switch_start(self._get_signal_name(switch.sel))
-        self._emit_switch_start(switch.sel)
+        self._emit_switch_start(self._get_signal_name(switch.sel))
 
         with self._line.indent():
             for case in switch.cases:
@@ -263,9 +264,18 @@ class Module(rtlil.Module):
         submodule.name = self._sanitize(submodule.name)
         submodule.kind = self._sanitize(submodule.kind)
 
-    def _emit_operator(self, operator: rtlil.Cell):
-        print('Emit operator:', operator.name, operator.kind, operator.ports)
-        pass
+    def _emit_operator(self, operator: rtlil.Cell, comb=False):
+        lhs = self._get_signal_name(operator.ports.get('Y', None))
+        rhs = self._operator_rhs(operator)
+
+        if lhs is None:
+            raise RuntimeError("Operator without output!")
+
+        with self._line.indent():
+            self._emit_operator_assignment(rtlil.Assignment(lhs, rhs), comb=comb)
+
+    def _operator_rhs(self, operator: rtlil.Cell) -> str:
+        return ''
 
     def _emit_signal(self, signal: rtlil.Wire):
         pass
@@ -361,14 +371,14 @@ class Module(rtlil.Module):
             else:
                 return [self._get_slice(indexed_mem, signal.slice.start, signal.slice.stop - 1)]
 
+        if isinstance(signal, rtlil.Cell):
+            return [self._operator_rhs(signal)]
+
         const_pattern = re.compile(r"(\d+)'([\d|-]+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
 
         if signal.startswith('{') and signal.endswith('}'):
             signal = signal[1:-1].strip()
-            concat = True
-        else:
-            concat = False
 
         real_parts = []
 

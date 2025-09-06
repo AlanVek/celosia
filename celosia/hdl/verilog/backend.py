@@ -102,19 +102,26 @@ class VerilogModule(BaseModule):
     def _concat(cls, parts) -> str:
         return f'{{ {", ".join(parts)} }}'
 
-    def _emit_assignment_lhs_rhs(self, lhs: str, rhs: str, symbol = '=', prefix=None):
+    def _emit_assignment_lhs_rhs(self, lhs: str, rhs: str, symbol = '=', prefix=None, parse=True):
         if prefix is None:
             prefix = ''
         elif prefix:
             prefix += ' '
 
-        self._line(f'{prefix}{self._get_signal_name(lhs)} {symbol} {self._get_signal_name(rhs)};')
+        if parse:
+            lhs = self._get_signal_name(lhs)
+            rhs = self._get_signal_name(rhs)
+
+        self._line(f'{prefix}{lhs} {symbol} {rhs};')
 
     def _emit_assignment(self, assignment: rtlil.Assignment):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, prefix='assign')
 
     def _emit_process_assignment(self, assignment: rtlil.Assignment, comb = True):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=')
+
+    def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=', parse=False)
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         super()._emit_submodule(submodule)
@@ -245,10 +252,12 @@ class VerilogModule(BaseModule):
             for content in process.contents:
                 self._regs.update(self._collect_lhs(content))
 
-    def _emit_operator(self, operator: rtlil.Cell):
-        print('Operator:', operator.kind, 'Ports:', operator.ports)
-        with self._line.indent():
-            operands = [self._get_signal_name(operator.ports['A'])]
-            if 'B' in operator.ports:
-                operands.append(self._get_signal_name(operator.ports['B']))
-            self._line(f'assign {self._get_signal_name(operator.ports["Y"])} = {f" {operator.kind} ".join(operands)};')
+    def _operator_rhs(self, operator: rtlil.Cell) -> str:
+        operands = [self._get_signal_name(operator.ports['A'])]
+        if 'B' in operator.ports:
+            operands.append(self._get_signal_name(operator.ports['B']))
+
+        if len(operands) == 1:
+            return f'{operator.kind} {operands[0]}'
+        else:
+            return f' {operator.kind} '.join(operands)
