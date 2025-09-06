@@ -45,6 +45,7 @@ class Module(rtlil.Module):
 
     def wire(self, *args, **kwargs):
         wire = super().wire(*args, **kwargs)
+        wire.name = self.sanitize(wire.name)
         self._signals[wire.name] = wire
         if wire.port_kind is not None:
             self._emitted_ports.append(wire)
@@ -57,6 +58,7 @@ class Module(rtlil.Module):
 
     def cell(self, *args, **kwargs):
         cell = super().cell(*args, **kwargs)
+        cell.name = self.sanitize(cell.name)
         if self._cell_is_submodule(cell):
             self._emitted_submodules.append(cell)
         elif self._cell_is_ff(cell):
@@ -74,6 +76,7 @@ class Module(rtlil.Module):
 
     def memory(self, *args, **kwargs):
         memory = super().memory(*args, **kwargs)
+        memory.name = self.sanitize(memory.name)
         self._emitted_memories[memory.name] = self._signals[memory.name] = Memory(memory)
         return memory
 
@@ -119,23 +122,23 @@ class Module(rtlil.Module):
 
     @classmethod
     def _cell_is_submodule(cls, cell: rtlil.Cell):
-        return not cls._cell_is_yosys(cell)
+        return cell.kind.startswith('\\')
 
     @classmethod
     def _cell_is_ff(cls, cell: rtlil.Cell):
-        return cls._cell_is_yosys(cell) and cell.kind in ('$dff', '$adff')
+        return cell.kind in ('$dff', '$adff')
 
     @classmethod
     def _cell_is_memory(cls, cell: rtlil.Cell):
-        return cls._cell_is_yosys(cell) and cell.kind == '$meminit_v2'
+        return cell.kind == '$meminit_v2'
 
     @classmethod
     def _cell_is_memory_wp(cls, cell: rtlil.Cell):
-        return cls._cell_is_yosys(cell) and cell.kind == '$memwr_v2'
+        return cell.kind == '$memwr_v2'
 
     @classmethod
     def _cell_is_memory_rp(cls, cell: rtlil.Cell):
-        return cls._cell_is_yosys(cell) and cell.kind == '$memrd_v2'
+        return cell.kind == '$memrd_v2'
 
     def _get_memory_from_port(self, port: rtlil.Cell) -> Memory:
         memid = port.parameters.get('MEMID', None)
@@ -308,6 +311,9 @@ class Module(rtlil.Module):
     def _emit_submodule(self, submodule: rtlil.Cell):
         submodule.name = self.sanitize(submodule.name)
         submodule.kind = self.sanitize(submodule.kind)
+
+        for port in tuple(submodule.ports.keys()):
+            submodule.ports[self.sanitize(port)] = submodule.ports.pop(port)
 
     def _emit_operator(self, operator: rtlil.Cell, comb=True):
         lhs = self._get_signal_name(operator.ports.get('Y', None))
