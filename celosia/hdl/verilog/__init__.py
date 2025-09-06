@@ -1,4 +1,4 @@
-from celosia.hdl.new_hdl import HDL
+from celosia.hdl import HDL
 from celosia.hdl.verilog.backend import VerilogModule
 
 class Verilog(HDL):
