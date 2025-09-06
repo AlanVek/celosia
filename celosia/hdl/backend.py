@@ -1,6 +1,7 @@
 from amaranth.back import rtlil
 from amaranth.back.rtlil import _const
 from celosia.hdl.memory import Memory, MemoryIndex
+from celosia.hdl import utils
 from typing import Any, Union
 from amaranth.hdl import _ast
 import re
@@ -201,6 +202,8 @@ class Module(rtlil.Module):
         used_idx: set[int] = set()
         for case in switch.cases:
             if not case.patterns:
+                if not used_idx:
+                    return False    # Weird case with only default?
                 break
 
             if len(case.patterns) > 1:
@@ -220,7 +223,7 @@ class Module(rtlil.Module):
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
         if self._is_switch_if(switch):
-            # return self._emit_if(switch, comb=comb)
+            return self._emit_if(switch, comb=comb)
             pass
 
         self._emit_switch_start(self._get_signal_name(switch.sel))
@@ -240,7 +243,36 @@ class Module(rtlil.Module):
         self._emit_switch_end()
 
     def _emit_if(self, switch: rtlil.Switch, comb=True):
-        pass
+        sel = self._get_raw_signals(switch.sel)
+
+        def get_case(i: int):
+            return sel[i]   # Assume all parts are 1-bit?
+
+        if len(sel) == 1:
+            signal = self._signals.get(sel[0], None)
+            if signal is not None and signal.width > 1:
+                def get_case(i: int):
+                    return self._get_slice(sel[0], i, i)    # Slice parts of the signal
+
+        first = True
+
+        for case in switch.cases:
+            if case.patterns:
+                assert len(case.patterns) == 1, "Internal error" # Should never happen
+                condition = get_case(case.patterns[0].index('1'))
+                if first:
+                    self._emit_if_start(condition)
+                    first = False
+                else:
+                    self._emit_elseif_start(condition)
+            else:
+                self._emit_else()
+
+            with self._line.indent():
+                self._emit_process_contents(case.contents, comb=comb)
+
+        if not first:
+            self._emit_if_end()
 
     def _emit_switch_start(self, sel: str):
         pass
@@ -258,6 +290,18 @@ class Module(rtlil.Module):
         pass
 
     def _emit_case_end(self):
+        pass
+
+    def _emit_if_start(self, sel: str):
+        pass
+
+    def _emit_elseif_start(self, sel: str):
+        pass
+
+    def _emit_else(self):
+        pass
+
+    def _emit_if_end(self):
         pass
 
     def _emit_submodule(self, submodule: rtlil.Cell):
@@ -374,7 +418,6 @@ class Module(rtlil.Module):
         if isinstance(signal, rtlil.Cell):
             return [self._operator_rhs(signal)]
 
-        const_pattern = re.compile(r"(\d+)'([\d|-]+)")
         slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
 
         if signal.startswith('{') and signal.endswith('}'):
@@ -383,37 +426,33 @@ class Module(rtlil.Module):
         real_parts = []
 
         while signal:
-            const_match = const_pattern.match(signal)
-
-            if const_match is not None:
+            const_params = utils.const_params(signal, ret_idx=True)
+            if const_params is not None:
+                const_width, const_value, const_idx = const_params
                 if not raw:
-                    real_parts.append(self._const_repr(*const_match.groups()))
-                signal = signal[const_match.end() + 1:]
+                    real_parts.append(self._const_repr(const_width, const_value))
+                signal = signal[const_idx + 1:]
                 continue
 
             slice_match = slice_pattern.match(signal)
             if slice_match is not None:
                 name = slice_match.group(1)
 
-                if raw:
-                    real_parts.append(name)
+                wire = self._signals.get(name, None)
+                if wire is None:
+                    raise RuntimeError(f"Unknown signal: {name}")
 
+                index = slice_match.group(2)
+
+                if ':' in index:
+                    stop, start = map(int, index.split(':'))
                 else:
-                    wire = self._signals.get(name, None)
-                    if wire is None:
-                        raise RuntimeError(f"Unknown signal: {name}")
+                    stop = start = int(index)
 
-                    index = slice_match.group(2)
-
-                    if ':' in index:
-                        stop, start = map(int, index.split(':'))
-                    else:
-                        stop = start = int(index)
-
-                    if wire.width == stop - start + 1:
-                        real_parts.append(name)
-                    else:
-                        real_parts.append(f'{self._get_slice(name, start, stop)}')
+                if raw or wire.width == stop - start + 1:
+                    real_parts.append(name)
+                else:
+                    real_parts.append(f'{self._get_slice(name, start, stop)}')
 
                 signal = signal[slice_match.end() + 1:]
                 continue
@@ -435,6 +474,10 @@ class Module(rtlil.Module):
     def _get_slice(cls, name: str, start: int, stop: int) -> str:
         return ''
 
-    @classmethod
-    def _get_mem_slice(cls, idx: MemoryIndex):
-        return cls._get_slice(idx.name, idx.address, idx.address)
+    def _get_mem_slice(self, idx: MemoryIndex):
+        const_params = utils.const_params(idx.address)
+        if const_params is not None:
+            _, address = const_params
+        else:
+            address = self._get_signal_name(idx.address)
+        return self._get_slice(idx.name, address, address)

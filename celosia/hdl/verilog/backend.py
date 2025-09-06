@@ -131,8 +131,9 @@ class VerilogModule(BaseModule):
                 line += '#('
                 self._line(line)
                 with self._line.indent():
-                    for name, value in submodule.parameters.items():
-                        self._line(f'.{name}({self._const(value)})')
+                    for i, (name, value) in enumerate(submodule.parameters.items()):
+                        sep = "," if i < len(submodule.parameters) - 1 else ""
+                        self._line(f'.{name}({self._const(value)}){sep}')
                 line = ') '
 
             line += str(submodule.name)
@@ -141,8 +142,9 @@ class VerilogModule(BaseModule):
                 line += ' ('
                 self._line(line)
                 with self._line.indent():
-                    for name, value in submodule.ports.items():
-                        self._line(f'.{name}({self._get_signal_name(value)})')
+                    for i, (name, value) in enumerate(submodule.ports.items()):
+                        sep = "," if i < len(submodule.ports) - 1 else ""
+                        self._line(f'.{name}({self._get_signal_name(value)}){sep}')
                 line = ')'
 
             self._line(f'{line};')
@@ -229,6 +231,18 @@ class VerilogModule(BaseModule):
 
     def _emit_module_end(self):
         self._line('endmodule')
+
+    def _emit_if_start(self, sel: str):
+        self._line(f'if ({sel}) begin')
+
+    def _emit_elseif_start(self, sel: str):
+        self._line(f'end else if ({sel}) begin')
+
+    def _emit_else(self):
+        self._line(f'end else begin')
+
+    def _emit_if_end(self):
+        self._line('end')
 
     def _collect_lhs(self, assignment: Union[rtlil.Assignment, rtlil.Switch, rtlil.Case]) -> set[str]:
         ret = set()
