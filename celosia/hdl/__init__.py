@@ -5,6 +5,9 @@ import pkgutil
 from contextlib import contextmanager
 from celosia.hdl.backend import Module
 
+# TODO: Check port$xxx$xxx (_ir.py line 1769)
+# TODO: Check Array
+
 class HDLExtensions(type):
     extensions: list[str] = []
 
@@ -35,6 +38,8 @@ class HDL(metaclass=HDLExtensions):
 
     @classmethod
     def _add_name(cls, assigned_names: set[str], name: str) -> str:
+        name = cls.ModuleClass.sanitize(name)
+
         curr_num = ''
         curr_idx = len(name) - 1
         while curr_idx >= 0 and name[curr_idx].isnumeric():
@@ -51,6 +56,8 @@ class HDL(metaclass=HDLExtensions):
         while cls._change_case(name) in assigned_names:
             name = f'{_name}{idx}'
             idx += 1
+
+        assigned_names.add(name)
 
         return name
 

@@ -22,7 +22,7 @@ class Module(rtlil.Module):
         self._emitted_operators: list[rtlil.Cell] = []
         self._emitted_flip_flops: list[rtlil.Cell] = []
 
-        self.name = self._sanitize(self.name)
+        self.name = self.sanitize(self.name)
 
         self._process_id = 0
 
@@ -30,11 +30,12 @@ class Module(rtlil.Module):
     def _const(cls, value: Any):
         return _const(value)
 
-    def _sanitize(self, name: str) -> str:
+    @classmethod
+    def sanitize(cls, name: str) -> str:
         return name
 
     def _auto_name(self):
-        return self._sanitize(super()._auto_name())
+        return self.sanitize(super()._auto_name())
 
     def _name(self, name):
         ret = super()._name(name)
@@ -305,8 +306,8 @@ class Module(rtlil.Module):
         pass
 
     def _emit_submodule(self, submodule: rtlil.Cell):
-        submodule.name = self._sanitize(submodule.name)
-        submodule.kind = self._sanitize(submodule.kind)
+        submodule.name = self.sanitize(submodule.name)
+        submodule.kind = self.sanitize(submodule.kind)
 
     def _emit_operator(self, operator: rtlil.Cell, comb=True):
         lhs = self._get_signal_name(operator.ports.get('Y', None))
@@ -381,6 +382,8 @@ class Module(rtlil.Module):
                 ret = [self._const_repr(r.width, r.value) for r in ret]
             else:
                 ret = self._const_repr(ret.width, ret.value)
+        else:
+            ret = self._const_repr(signal.width, 0)
         return ret
 
     @staticmethod
@@ -393,7 +396,9 @@ class Module(rtlil.Module):
         if ret is None:
             return ret
 
-        if len(ret) == 1:
+        if len(ret) == 0:
+            return self._const_repr(1, 0)
+        elif len(ret) == 1:
             return ret[0]
         else:
             return self._concat(ret)
@@ -409,11 +414,14 @@ class Module(rtlil.Module):
             return [] if raw else [self._const_repr(signal.width, signal.value)]
 
         if isinstance(signal, MemoryIndex):
-            indexed_mem = self._get_mem_slice(signal)
-            if raw or signal.slice is None:
-                return [indexed_mem]
+            if raw:
+                return [signal.name]
             else:
-                return [self._get_slice(indexed_mem, signal.slice.start, signal.slice.stop - 1)]
+                indexed_mem = self._get_mem_slice(signal)
+                if raw or signal.slice is None:
+                    return [indexed_mem]
+                else:
+                    return [self._get_slice(indexed_mem, signal.slice.start, signal.slice.stop - 1)]
 
         if isinstance(signal, rtlil.Cell):
             return [self._operator_rhs(signal)]

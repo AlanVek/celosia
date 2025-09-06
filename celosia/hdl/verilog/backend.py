@@ -46,8 +46,9 @@ class VerilogModule(BaseModule):
             return f'"{value}"'
         return super()._const(value)
 
-    def _sanitize(self, name: str) -> str:
-        name = super()._sanitize(name).strip()
+    @classmethod
+    def sanitize(cls, name: str) -> str:
+        name = super().sanitize(name).strip()
 
         # TODO: Update sanitization for Verilog
 
@@ -68,11 +69,11 @@ class VerilogModule(BaseModule):
         for old, new in replace_map.items():
             name = name.replace(old, new)
 
-        while name in self.protected:
+        while name in cls.protected:
             name = 'esc_' + name
 
         if not name:
-            name = self._sanitize('unnamed')
+            name = cls.sanitize('unnamed')
 
         if name[0].isnumeric():
             name = 'esc_' + name
@@ -151,8 +152,12 @@ class VerilogModule(BaseModule):
 
     def _emit_signal(self, signal: rtlil.Wire):
         with self._line.indent():
-            type = 'reg' if self._signal_is_reg(signal) else 'wire'
             init = self._get_initial(signal)
+            if self._signal_is_reg(signal):
+                type = 'reg'
+            else:
+                type = 'wire'
+                init = None
 
             width = '' if signal.width <= 1 else f'[{signal.width - 1}:0] '
             dir = '' if signal.port_kind is None else f'{signal.port_kind} '
@@ -183,7 +188,7 @@ class VerilogModule(BaseModule):
         self._line(');')
 
     def _signal_is_reg(self, signal: rtlil.Wire):
-        return 'init' in signal.attributes or signal.name in self._regs
+        return signal.name in self._regs
 
     def _emit_process_start(self, clock: str = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
         ret = super()._emit_process_start(clock, polarity, arst, arst_polarity)
@@ -265,6 +270,12 @@ class VerilogModule(BaseModule):
         for process, _ in self._emitted_processes:
             for content in process.contents:
                 self._regs.update(self._collect_lhs(content))
+
+        for flip_flop in self._emitted_flip_flops:
+            self._regs.update(self._get_raw_signals(flip_flop.ports['Q']))
+
+        for memory in self._emitted_memories.values():
+            self._regs.add(memory.name)
 
     def _operator_rhs(self, operator: rtlil.Cell) -> str:
         # TODO: Any issues with constant unary?

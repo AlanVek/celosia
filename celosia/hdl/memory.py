@@ -24,7 +24,7 @@ class WritePort:
 
     def build(self, signal_map: dict[str, rtlil.Wire], collect_signals):
         self.addr: str = self.cell.ports['ADDR']
-        self.data: str = self.cell.ports['DATA']
+        data: str = self.cell.ports['DATA']
         enable = self.cell.ports['EN']
         clk: str = collect_signals(self.cell.ports['CLK'])[0]
         full_en: list[str] = []
@@ -58,10 +58,13 @@ class WritePort:
         if self.width % len(full_en):
             raise RuntimeError("Invalid enables for write port of memory")
 
-        const_params = utils.const_params(self.data)
+        const_params = utils.const_params(data)
         data_value = None
         if const_params is not None:
-            data_width, data_value = const_params
+            _, data_value = const_params
+            self.data = data
+        else:
+            self.data = collect_signals(data)[0]
 
         chunk_width = self.width // len(full_en)
         start_idx = 0
@@ -109,7 +112,7 @@ class ReadPort:
         addr: str = self.cell.ports['ADDR']
 
         if self.clk_enable:
-            clk = self.cell.ports['CLK']
+            clk = collect_signals(self.cell.ports['CLK'])[0]
             process = rtlil.Process(name=None)
 
             self.proxy = new_signal_creator(self.width, name = f'_{self.portid}_')
