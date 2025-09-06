@@ -4,7 +4,6 @@ from celosia.hdl.memory import Memory, MemoryIndex
 from celosia.hdl import utils
 from typing import Any, Union
 from amaranth.hdl import _ast
-import re
 
 # TODO: Tap into rtlil.ModuleEmitter so we can have control over Wire names
 
@@ -226,9 +225,9 @@ class Module(rtlil.Module):
         return True
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
+        # TODO: Filter empty cases
         if self._is_switch_if(switch):
             return self._emit_if(switch, comb=comb)
-            pass
 
         self._emit_switch_start(self._get_signal_name(switch.sel))
 
@@ -247,23 +246,13 @@ class Module(rtlil.Module):
         self._emit_switch_end()
 
     def _emit_if(self, switch: rtlil.Switch, comb=True):
-        sel = self._get_raw_signals(switch.sel)
-
-        def get_case(i: int):
-            return sel[i]   # Assume all parts are 1-bit?
-
-        if len(sel) == 1:
-            signal = self._signals.get(sel[0], None)
-            if signal is not None and signal.width > 1:
-                def get_case(i: int):
-                    return self._get_slice(sel[0], i, i)    # Slice parts of the signal
-
+        sel = self._collect_signals(switch.sel, open_bits=True)
         first = True
 
         for case in switch.cases:
             if case.patterns:
                 assert len(case.patterns) == 1, "Internal error" # Should never happen
-                condition = get_case(case.patterns[0].index('1'))
+                condition = sel[case.patterns[0].index('1')]
                 if first:
                     self._emit_if_start(condition)
                     first = False
@@ -412,7 +401,7 @@ class Module(rtlil.Module):
     def _get_raw_signals(self, signal: Union[str, _ast.Const]) -> list[str]:
         return self._collect_signals(signal, raw=True)
 
-    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False) -> list[str]:
+    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False, open_bits=False) -> list[str]:
         if signal is None:
             return None
 
@@ -432,8 +421,6 @@ class Module(rtlil.Module):
         if isinstance(signal, rtlil.Cell):
             return [self._operator_rhs(signal)]
 
-        slice_pattern = re.compile(r'(.*?) \[(.*?)\]')
-
         if signal.startswith('{') and signal.endswith('}'):
             signal = signal[1:-1].strip()
 
@@ -443,32 +430,37 @@ class Module(rtlil.Module):
             const_params = utils.const_params(signal, ret_idx=True)
             if const_params is not None:
                 const_width, const_value, const_idx = const_params
-                if not raw:
+                if open_bits:
+                    real_parts.extend((
+                        self._const_repr(1, (const_value >> i) & 1) for i in range(const_width)
+                    ))
+                elif not raw:
                     real_parts.append(self._const_repr(const_width, const_value))
                 signal = signal[const_idx + 1:]
                 continue
 
-            slice_match = slice_pattern.match(signal)
-            if slice_match is not None:
-                name = slice_match.group(1)
+            slice_params = utils.slice_params(signal, ret_idx=True)
+            if slice_params is not None:
+                slice_name, slice_start, slice_stop, slice_idx = slice_params
 
-                wire = self._signals.get(name, None)
+                wire = self._signals.get(slice_name, None)
                 if wire is None:
-                    raise RuntimeError(f"Unknown signal: {name}")
+                    raise RuntimeError(f"Unknown signal: {slice_name}")
 
-                index = slice_match.group(2)
-
-                if ':' in index:
-                    stop, start = map(int, index.split(':'))
+                if open_bits:
+                    if wire.width == 1:
+                        assert slice_start == slice_stop == 0, "Internal error, can't idx > 0 for 1-bit signal"
+                        real_parts.append(slice_name)
+                    else:
+                        real_parts.extend((
+                            self._get_slice(slice_name, i, i) for i in range(slice_start, slice_stop + 1)
+                        ))
+                elif raw or wire.width == slice_stop - slice_start + 1:
+                    real_parts.append(slice_name)
                 else:
-                    stop = start = int(index)
+                    real_parts.append(f'{self._get_slice(slice_name, slice_start, slice_stop)}')
 
-                if raw or wire.width == stop - start + 1:
-                    real_parts.append(name)
-                else:
-                    real_parts.append(f'{self._get_slice(name, start, stop)}')
-
-                signal = signal[slice_match.end() + 1:]
+                signal = signal[slice_idx + 1:]
                 continue
 
             space_idx = signal.find(' ')
@@ -485,7 +477,7 @@ class Module(rtlil.Module):
         return str(parts)
 
     @classmethod
-    def _get_slice(cls, name: str, start: int, stop: int) -> str:
+    def _get_slice(cls, name: str, start: int, stop: int = None) -> str:
         return ''
 
     def _get_mem_slice(self, idx: MemoryIndex):

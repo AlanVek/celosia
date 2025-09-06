@@ -209,8 +209,8 @@ class VerilogModule(BaseModule):
         self._line('end')
 
     @classmethod
-    def _get_slice(cls, name: str, start: int, stop: int) -> str:
-        if stop == start:
+    def _get_slice(cls, name: str, start: int, stop: int=None) -> str:
+        if stop is None or stop == start:
             idx = start
         else:
             idx = f'{stop}:{start}'
@@ -281,7 +281,7 @@ class VerilogModule(BaseModule):
         # TODO: Any issues with constant unary?
         UNARY_OPERATORS = {
             "$neg": "-",
-            "$not": "!",
+            "$not": "~",
             "$reduce_bool": "|",    # TODO: Check
             "$reduce_or": "|",
             "$reduce_and": "&",
@@ -305,6 +305,7 @@ class VerilogModule(BaseModule):
             "$gt": '>',
             "$le": '<=',
             "$ge": '>=',
+            "$shift": '>>',
         }
 
         rhs = None
