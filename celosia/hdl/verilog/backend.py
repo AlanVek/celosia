@@ -1,4 +1,4 @@
-from celosia.hdl.backend import Module as BaseModule, Memory
+from celosia.hdl.backend import Module as BaseModule
 from typing import Any, Union
 from amaranth.back import rtlil
 
@@ -118,15 +118,30 @@ class VerilogModule(BaseModule):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=')
 
     def _emit_submodule(self, submodule: rtlil.Cell):
-        print('Emit submodule:', submodule.name, submodule.kind)
-        pass
+        super()._emit_submodule(submodule)
+        with self._line.indent():
+            line = f'{submodule.kind} '
+            if submodule.parameters:
+                line += '#('
+                self._line(line)
+                with self._line.indent():
+                    for name, value in submodule.parameters.items():
+                        self._line(f'.{name}({self._const(value)})')
+                line = ') '
 
-    def _emit_operator(self, operator: rtlil.Cell):
-        print('Emit operator:', operator.name, operator.kind, operator.ports)
-        pass
+            line += str(submodule.name)
+
+            if submodule.ports:
+                line += ' ('
+                self._line(line)
+                with self._line.indent():
+                    for name, value in submodule.ports.items():
+                        self._line(f'.{name}({self._get_signal_name(value)})')
+                line = ')'
+
+            self._line(f'{line};')
 
     def _emit_signal(self, signal: rtlil.Wire):
-        super()._emit_signal(signal)
         with self._line.indent():
             type = 'reg' if self._signal_is_reg(signal) else 'wire'
             init = self._get_initial(signal)
@@ -149,21 +164,15 @@ class VerilogModule(BaseModule):
                 reset = '' if init is None else f' = {init}'
                 self._line(f'{dir}{type} {width}{signal.name}{reset};')
 
-    # def _emit_memory(self, memory: Memory):
-    #     print('Emit memory:', memory.name, memory.depth, memory.width)
-    #     pass
-
-    def _emit_module_and_ports(self, ports: list[rtlil.Wire]):
+    def _emit_pre_callback(self):
         self._collect_process_signals()
 
+    def _emit_module_definition(self):
         self._line(f"module {self.name} (")
         with self._line.indent():
-            for i, port in enumerate(ports):
-                self._line(port.name + ('' if i >= len(ports) - 1 else ','))
+            for i, port in enumerate(self._emitted_ports):
+                self._line(port.name + ('' if i >= len(self._emitted_ports) - 1 else ','))
         self._line(');')
-
-        for i, port in enumerate(ports):
-            self._emit_signal(port)
 
     def _signal_is_reg(self, signal: rtlil.Wire):
         return 'init' in signal.attributes or signal.name in self._regs

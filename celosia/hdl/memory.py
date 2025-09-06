@@ -88,6 +88,7 @@ class ReadPort:
             process = rtlil.Process(name=None)
 
             # TODO: Validate that name is not in use?
+            # TODO: Most likely proxy is not needed and we can use `data`
             proxy: rtlil.Wire = new_signal_creator(self.width, name = f'_{self.portid}_')
             new_signals.append(proxy)
 
