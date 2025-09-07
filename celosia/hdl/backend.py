@@ -21,6 +21,7 @@ class Module(rtlil.Module):
         self._emitted_memories: dict[str, Memory] = {}
         self._emitted_operators: list[rtlil.Cell] = []
         self._emitted_flip_flops: list[rtlil.Cell] = []
+        self._emitted_divisions: list[rtlil.Cell] = []
 
         self.name = self.sanitize(self.name)
 
@@ -69,6 +70,8 @@ class Module(rtlil.Module):
             self._get_memory_from_port(cell).add_wp(cell)
         elif self._cell_is_memory_rp(cell):
             self._get_memory_from_port(cell).add_rp(cell)
+        elif self._cell_is_division(cell):
+            self._emitted_divisions.append(cell)
         # elif self._cell_is_yosys(cell):
         else:
             self._emitted_operators.append(cell)
@@ -87,6 +90,10 @@ class Module(rtlil.Module):
         # Memories need to go first because they may create new signals, processes and connections
         for memory in self._emitted_memories.values():
             self._emit_memory(memory)
+
+        # Divisions may also create new signals, processes and connections
+        for division in self._emitted_divisions:
+            self._signed_division_fix(division)
 
         # After this point, no new signals, processes or connections are created
         # We have this callback so subclasses can gather all the information they may need before starting
@@ -139,6 +146,10 @@ class Module(rtlil.Module):
     @classmethod
     def _cell_is_memory_rp(cls, cell: rtlil.Cell):
         return cell.kind == '$memrd_v2'
+
+    @classmethod
+    def _cell_is_division(cls, cell: rtlil.Cell):
+        return cell.kind in ('$divfloor', '$modfloor')
 
     def _get_memory_from_port(self, port: rtlil.Cell) -> Memory:
         memid = port.parameters.get('MEMID', None)
@@ -488,3 +499,169 @@ class Module(rtlil.Module):
         else:
             address = self._get_signal_name(idx.address)
         return self._get_slice(idx.name, address, address)
+
+    def _signed_division_fix(self, division: rtlil.Cell):
+        DIVISION_OPERATORS = {
+            "$divfloor",
+            "$modfloor",
+        }
+
+        if not (
+            (division.kind in DIVISION_OPERATORS) and
+            (division.parameters['A_SIGNED'] or division.parameters['B_SIGNED'])
+        ):
+            self._emitted_operators.append(division)
+            return
+
+        operands = []
+        widths = []
+        for port in ('A', 'B'):
+            operands.append(self._get_signal_name(division.ports[port]))
+            widths.append(division.parameters[f'{port}_WIDTH'])
+
+        max_size = max(widths) + 2
+
+        dividend = self.wire(max_size)
+        divisor = self.wire(max_size)
+
+        # TODO: Maybe Cat(operand, operand[-1], operand[-1], ...) to align with Amaranth's way
+        self.connections.append((dividend.name, self._signed(operands[0])))
+        self.connections.append((divisor.name, self._signed(operands[1])))
+
+        # dividend[-1] == divisor[-1]
+        cmp_sign = self.wire(1)
+        self._emitted_operators.append(rtlil.Cell(kind = '$eq', name=None,
+            ports = {
+                'A': self._get_slice(dividend.name, max_size-1),
+                'B': self._get_slice(divisor.name, max_size-1),
+                'Y': cmp_sign.name,
+            },
+            parameters = {
+                'A_WIDTH': 1,
+                'A_SIGNED': False,
+                'B_WIDTH': 1,
+                'B_SIGNED': False,
+            }
+        ))
+
+        # dividend == 0
+        cmp_zero = self.wire(1)
+        self._emitted_operators.append(rtlil.Cell(kind = '$eq', name=None,
+            ports = {
+                'A': dividend.name,
+                'B': self._const_repr(max_size, 0),
+                'Y': cmp_zero.name,
+            },
+            parameters = {
+                'A_WIDTH': max_size,
+                'A_SIGNED': True,
+                'B_WIDTH': max_size,
+                'B_SIGNED': True,
+                'Y_WIDTH': 1,
+            }
+        ))
+
+        # divisor + 1
+        addition = self.wire(max_size)
+        self._emitted_operators.append(rtlil.Cell(kind='$add', name=None,
+            ports = {
+                'A': divisor.name,
+                'B': self._const_repr(max_size, 1),
+                'Y': addition.name,
+            },
+            parameters = {
+                'A_WIDTH': max_size,
+                'A_SIGNED': True,
+                'B_WIDTH': max_size,
+                'B_SIGNED': True,
+            }
+        ))
+
+        # divisor - 1
+        substraction = self.wire(max_size)
+        self._emitted_operators.append(rtlil.Cell(kind='$sub', name=None,
+            ports = {
+                'A': divisor.name,
+                'B': self._const_repr(max_size, 1),
+                'Y': substraction.name,
+            },
+            parameters = {
+                'A_WIDTH': max_size,
+                'A_SIGNED': True,
+                'B_WIDTH': max_size,
+                'B_SIGNED': True,
+            }
+        ))
+
+        # divisor[-1] ? (divisor + 1) : (divisor - 1)
+        substraction_mux = self.wire(max_size)
+        self._emitted_operators.append(rtlil.Cell(kind = '$mux', name = None,
+            ports = {
+                'S': self._get_slice(divisor.name, max_size - 1),
+                'A': substraction.name,
+                'B': addition.name,
+                'Y': substraction_mux.name,
+            },
+        ))
+
+        # dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1))
+        mux_false_operand = self.wire(max_size)
+        self._emitted_operators.append(rtlil.Cell(kind='$sub', name=None,
+            ports = {
+                'A': dividend.name,
+                'B': substraction_mux.name,
+                'Y': mux_false_operand.name,
+            },
+            parameters = {
+                'A_WIDTH': max_size,
+                'A_SIGNED': True,
+                'B_WIDTH': max_size,
+                'B_SIGNED': True,
+            }
+        ))
+
+        # (dividend[-1] == divisor[-1]) | (dividend == 0)
+        mux_sel = self.wire(1)
+        self._emitted_operators.append(rtlil.Cell(kind = '$or', name=None,
+            ports = {
+                'A': cmp_sign.name,
+                'B': cmp_zero.name,
+                'Y': mux_sel.name,
+            },
+            parameters = {
+                'A_WIDTH': 1,
+                'A_SIGNED': False,
+                'B_WIDTH': 1,
+                'B_SIGNED': False,
+                'Y_WIDTH': 1,
+            }
+        ))
+
+        # (dividend[-1] == divisor[-1]) | (dividend == 0) ? dividend : (dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1)))
+        real_dividend = self.wire(max_size)
+        self._emitted_operators.append(rtlil.Cell(kind = '$mux', name = None,
+            ports = {
+                'S': mux_sel.name,
+                'A': mux_false_operand.name,
+                'B': dividend.name,
+                'Y': real_dividend.name,
+            },
+        ))
+
+        self._emitted_operators.append(rtlil.Cell(kind = division.kind, name = None,
+            ports = {
+                'A': real_dividend.name,
+                'B': divisor.name,
+                'Y': division.ports['Y'],
+            },
+            parameters = {
+                'A_WIDTH': max_size,
+                'A_SIGNED': True,
+                'B_WIDTH': max_size,
+                'B_SIGNED': True,
+                'Y_WIDTH': division.parameters['Y_WIDTH'],
+            }
+        ))
+
+    def _signed(self, value) -> str:
+        return ''

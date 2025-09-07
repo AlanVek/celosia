@@ -277,6 +277,9 @@ class VerilogModule(BaseModule):
         for memory in self._emitted_memories.values():
             self._regs.add(memory.name)
 
+    def _signed(self, value) -> str:
+        return f'$signed({value})'
+
     def _operator_rhs(self, operator: rtlil.Cell) -> str:
         # TODO: Any issues with constant unary?
         UNARY_OPERATORS = {
@@ -315,7 +318,7 @@ class VerilogModule(BaseModule):
             for port in ('A',):
                 operand = self._get_signal_name(operator.ports[port])
                 if operator.parameters[f'{port}_SIGNED']:
-                    operand = f'$signed({operand})'
+                    operand = self._signed(operand)
                 operands.append(operand)
 
             rhs = f'{UNARY_OPERATORS[operator.kind]} {operands[0]}'
@@ -325,7 +328,7 @@ class VerilogModule(BaseModule):
             for port in ('A', 'B'):
                 operand = self._get_signal_name(operator.ports[port])
                 if operator.parameters[f'{port}_SIGNED']:
-                    operand = f'$signed({operand})'
+                    operand = self._signed(operand)
                 operands.append(operand)
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
