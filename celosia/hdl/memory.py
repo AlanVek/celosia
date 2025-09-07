@@ -46,7 +46,9 @@ class WritePort:
             if isinstance(en, bool):
                 full_en.append(en)
             else:
-                raw = collect_signals(en, raw=True)[0]
+                raw = collect_signals(en, raw=True)
+                assert len(raw) == 1, "Internal error"
+                raw = raw[0]
                 full_en.extend(
                     f'{raw} [{i}]' for i in range(signal_map[raw].width)
                 )
@@ -60,11 +62,18 @@ class WritePort:
 
         const_params = utils.const_params(data)
         data_value = None
+        allow_slice = False
         if const_params is not None:
             _, data_value = const_params
             self.data = data
         else:
-            self.data = collect_signals(data)[0]
+            new_data = collect_signals(data)
+            if len(new_data) == 1:
+                allow_slice = True
+                self.data = new_data[0]     # TODO: Maybe check that it's not a slice already? Otherwise it will fail
+            else:
+                assert len(full_en) <= 1, "Cannot take slice of concatenation"
+                self.data = data
 
         chunk_width = self.width // len(full_en)
         start_idx = 0
@@ -76,7 +85,10 @@ class WritePort:
             lhs = MemoryIndex(self.name, self.addr, part)
 
             if data_value is None:
-                rhs = f'{self.data} [{start_idx+chunk_width-1}:{start_idx}]'
+                if allow_slice:
+                    rhs = f'{self.data} [{start_idx+chunk_width-1}:{start_idx}]'
+                else:
+                    rhs = f'{self.data}'
             else:
                 rhs = _ast.Const((data_value >> start_idx) & int('1' * chunk_width, 2), chunk_width)
 

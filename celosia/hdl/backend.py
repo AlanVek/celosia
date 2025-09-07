@@ -6,6 +6,7 @@ from typing import Any, Union
 from amaranth.hdl import _ast
 
 # TODO: Tap into rtlil.ModuleEmitter so we can have control over Wire names
+# TODO: Yosys signed division fix
 
 class Module(rtlil.Module):
     def __init__(self, *args, **kwargs):
