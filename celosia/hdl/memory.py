@@ -256,9 +256,11 @@ class Memory(rtlil.Wire):
 
     def add_wp(self, wp: rtlil.Cell):
         self.wps.append(WritePort(wp))
+        return self.wps[-1]
 
-    def add_rp(self, rp: rtlil.Cell):
-        self.rps.append(ReadPort(rp, len(self.rps)))
+    def add_rp(self, rp: rtlil.Cell, id: int):
+        self.rps.append(ReadPort(rp, id))
+        return self.rps[-1]
 
     def build(self, signal_map: dict[str, rtlil.Wire], collect_signals, new_signal_creator):
         processes: list[tuple[rtlil.Process, str]] = []

@@ -26,6 +26,7 @@ class Module(rtlil.Module):
         self.name = self.sanitize(self.name)
 
         self._process_id = 0
+        self._rp_count = 0
 
     @classmethod
     def _const(cls, value: Any):
@@ -69,7 +70,8 @@ class Module(rtlil.Module):
         elif self._cell_is_memory_wp(cell):
             self._get_memory_from_port(cell).add_wp(cell)
         elif self._cell_is_memory_rp(cell):
-            self._get_memory_from_port(cell).add_rp(cell)
+            if self._get_memory_from_port(cell).add_rp(cell, self._rp_count).clk_enable:
+                self._rp_count += 1
         elif self._cell_is_division(cell):
             self._emitted_divisions.append(cell)
         # elif self._cell_is_yosys(cell):
