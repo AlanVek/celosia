@@ -1,12 +1,11 @@
 from amaranth.back import rtlil
 from amaranth.back.rtlil import _const
-from celosia.hdl.memory import Memory, MemoryIndex
-from celosia.hdl import utils
+from celosia.hdl.memory import Memory
+import celosia.hdl.wire as celosia_wire
 from typing import Any, Union
 from amaranth.hdl import _ast
 
 # TODO: Tap into rtlil.ModuleEmitter so we can have control over Wire names
-# TODO: Yosys signed division fix
 
 class Module(rtlil.Module):
     def __init__(self, *args, **kwargs):
@@ -243,12 +242,12 @@ class Module(rtlil.Module):
         if self._is_switch_if(switch):
             return self._emit_if(switch, comb=comb)
 
-        self._emit_switch_start(self._get_signal_name(switch.sel))
+        self._emit_switch_start(self._represent(switch.sel))
 
         with self._line.indent():
             for case in switch.cases:
                 if case.patterns:
-                    pattern = self._case_patterns((self._get_signal_name(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
+                    pattern = self._case_patterns((self._represent(f"{len(pattern)}'{pattern}") for pattern in case.patterns))
                 else:
                     pattern = self._case_default()
 
@@ -260,19 +259,19 @@ class Module(rtlil.Module):
         self._emit_switch_end()
 
     def _emit_if(self, switch: rtlil.Switch, comb=True):
-        sel = self._collect_signals(switch.sel, open_bits=True)
+        sel = self._collect_signals(switch.sel)
         first = True
 
         for case in switch.cases:
             if case.patterns:
                 assert len(case.patterns) == 1, "Internal error" # Should never happen
-                condition = sel[case.patterns[0].index('1')]
+                condition = self._represent(sel[case.patterns[0][::-1].index('1')])
                 if first:
                     self._emit_if_start(condition)
                     first = False
                 else:
                     self._emit_elseif_start(condition)
-            else:
+            elif not first:
                 self._emit_else()
 
             with self._line.indent():
@@ -319,8 +318,8 @@ class Module(rtlil.Module):
             submodule.ports[self.sanitize(port)] = submodule.ports.pop(port)
 
     def _emit_operator(self, operator: rtlil.Cell, comb=True):
-        lhs = self._get_signal_name(operator.ports.get('Y', None))
-        rhs = self._operator_rhs(operator)
+        lhs = operator.ports.get('Y', None)
+        rhs = operator
 
         if lhs is None:
             raise RuntimeError("Operator without output!")
@@ -328,14 +327,14 @@ class Module(rtlil.Module):
         with self._line.indent():
             self._emit_operator_assignment(rtlil.Assignment(lhs, rhs), comb=comb)
 
-    def _operator_rhs(self, operator: rtlil.Cell) -> str:
+    def _operator_repr(self, operator: rtlil.Cell) -> str:
         return ''
 
     def _emit_signal(self, signal: rtlil.Wire):
         pass
 
     def _emit_memory(self, memory: Memory):
-        processes, connections = memory.build(self._signals, self._collect_signals, self.wire)
+        processes, connections = memory.build(self._collect_signals, self.wire)
 
         for clk, process in processes:
             kwargs = {}
@@ -349,11 +348,11 @@ class Module(rtlil.Module):
         pass
 
     def _emit_flip_flop(self, flip_flop: rtlil.Cell):
-        arst_value = self._get_signal_name(flip_flop.parameters.get('ARST_VALUE', None))
+        arst_value = self._convert_signals(flip_flop.parameters.get('ARST_VALUE', None))
         arst_polarity = flip_flop.parameters.get('ARST_POLARITY', True)
-        arst = self._get_signal_name(flip_flop.ports.get('ARST', None))
-        data = self._get_signal_name(flip_flop.ports['D'])
-        out = self._get_signal_name(flip_flop.ports['Q'])
+        arst = self._convert_signals(flip_flop.ports.get('ARST', None))
+        data = self._convert_signals(flip_flop.ports['D'])
+        out = self._convert_signals(flip_flop.ports['Q'])
 
         process = rtlil.Process(name=None)
 
@@ -370,7 +369,7 @@ class Module(rtlil.Module):
         self._emit_process(
             process,
             comb = False,
-            clock = self._get_signal_name(flip_flop.ports['CLK']),
+            clock = flip_flop.ports['CLK'],
             polarity = flip_flop.parameters['CLK_POLARITY'],
             arst = arst,
             arst_polarity = arst_polarity,
@@ -399,108 +398,140 @@ class Module(rtlil.Module):
     def _const_repr(width, value):
         return ''
 
-    def _get_signal_name(self, signal: Union[str, _ast.Const]) -> str:
-        ret = self._collect_signals(signal, raw=False)
-
-        if ret is None:
-            return ret
-
-        if len(ret) == 0:
-            return self._const_repr(1, 0)
-        elif len(ret) == 1:
-            return ret[0]
+    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False) -> Union[celosia_wire.Wire, list[celosia_wire.Wire]]:
+        if raw:
+            return self._get_raw_signals(signal)
         else:
-            return self._concat(ret)
+            return self._convert_signals(signal)
 
-    def _get_raw_signals(self, signal: Union[str, _ast.Const]) -> list[str]:
-        return self._collect_signals(signal, raw=True)
-
-    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False, open_bits=False) -> list[str]:
+    def _represent(self, signal: celosia_wire.Wire) -> str:
         if signal is None:
-            return None
+            return signal
 
-        if isinstance(signal, _ast.Const):
-            return [] if raw else [self._const_repr(signal.width, signal.value)]
+        if isinstance(signal, celosia_wire.Concat):
+            if len(signal.parts) == 1:
+                return self._represent(signal.parts[0])
+            return self._concat([self._represent(part) for part in signal.parts])
 
-        if isinstance(signal, MemoryIndex):
-            if raw:
-                return [signal.name]
-            else:
-                indexed_mem = self._get_mem_slice(signal)
-                if raw or signal.slice is None:
-                    return [indexed_mem]
-                else:
-                    return [self._get_slice(indexed_mem, signal.slice.start, signal.slice.stop - 1)]
+        if isinstance(signal, celosia_wire.Slice):
+            wire_rep = self._represent(signal.wire)
+            if signal.start_idx == 0 and signal.stop_idx >= signal.wire.width:
+                return wire_rep
+            return self._slice_repr(wire_rep, signal.start_idx, stop=signal.stop_idx-1)
+
+        if isinstance(signal, (_ast.Const, celosia_wire.Const)):
+            return self._const_repr(signal.width, signal.value)
+
+        if isinstance(signal, celosia_wire.Cell):
+            return self._operator_repr(signal.cell)
 
         if isinstance(signal, rtlil.Cell):
-            return [self._operator_rhs(signal)]
+            return self._represent(celosia_wire.Cell(signal))
+
+        if isinstance(signal, celosia_wire.MemoryIndex):
+            return self._mem_slice_repr(signal)
+
+        if isinstance(signal, celosia_wire.Wire):
+            return signal.wire.name
+
+        if isinstance(signal, rtlil.Wire):
+            return signal.name
+
+        # TODO: If everything else is handled correctly, this should not be needed
+        if isinstance(signal, str):
+            return self._represent(self._convert_signals(signal))
+
+        raise ValueError(f"Unknown type to represent: {type(signal)}")
+
+    def _convert_signals(self, signal: Any) -> Union[rtlil.Wire, rtlil.Cell]:
+        if signal is None:
+            return signal
+
+        if isinstance(signal, celosia_wire.Wire):
+            return signal
+
+        # Wire
+        if isinstance(signal, rtlil.Wire):
+            return celosia_wire.Wire(signal)
+
+        # Cell
+        if isinstance(signal, rtlil.Cell):
+            return celosia_wire.Cell(signal)
+
+        # Const
+        if isinstance(signal, _ast.Const):
+            return celosia_wire.Const(signal.value, signal.width)
+
+        if not isinstance(signal, str):
+            raise RuntimeError(f"Unknown signal type: {type(signal)}")
 
         if signal.startswith('{') and signal.endswith('}'):
-            signal = signal[1:-1].strip()
+            signal = signal[1:-1]
 
-        real_parts = []
+        real_parts: list[celosia_wire.Wire] = []
 
-        while signal:
-            const_params = utils.const_params(signal, ret_idx=True)
-            if const_params is not None:
-                const_width, const_value, const_idx = const_params
-                if open_bits:
-                    real_parts.extend((
-                        self._const_repr(1, (const_value >> i) & 1) for i in range(const_width)
-                    ))
-                elif not raw:
-                    real_parts.append(self._const_repr(const_width, const_value))
-                signal = signal[const_idx + 1:]
-                continue
+        for part in signal.split():
+            const = celosia_wire.Const.from_string(part)
 
-            slice_params = utils.slice_params(signal, ret_idx=True)
-            if slice_params is not None:
-                slice_name, slice_start, slice_stop, slice_idx = slice_params
+            if const is not None:
+                real_parts.append(const)
 
-                wire = self._signals.get(slice_name, None)
-                if wire is None:
-                    raise RuntimeError(f"Unknown signal: {slice_name}")
-
-                if open_bits:
-                    if wire.width == 1:
-                        assert slice_start == slice_stop == 0, "Internal error, can't idx > 0 for 1-bit signal"
-                        real_parts.append(slice_name)
-                    else:
-                        real_parts.extend((
-                            self._get_slice(slice_name, i, i) for i in range(slice_start, slice_stop + 1)
-                        ))
-                elif raw or wire.width == slice_stop - slice_start + 1:
-                    real_parts.append(slice_name)
+            elif part.startswith('[') and part.endswith(']'):
+                part = part[1:-1]
+                if ':' in part:
+                    stop, start = map(int, part.split(':', maxsplit=1))
                 else:
-                    real_parts.append(f'{self._get_slice(slice_name, slice_start, slice_stop)}')
+                    start = stop = int(part)
 
-                signal = signal[slice_idx + 1:]
-                continue
+                wire = real_parts[-1]
+                if wire.width != stop - start + 1:
+                    real_parts[-1] = celosia_wire.Slice(wire, start_idx=start, stop_idx=stop+1)
+            else:
+                wire = self._signals.get(part, None)
+                if wire is None:
+                    raise RuntimeError(f"Unknown signal: {part}")
+                real_parts.append(celosia_wire.Wire(wire))
 
-            space_idx = signal.find(' ')
-            if space_idx < 0:
-                space_idx = len(signal)
+        if len(real_parts) == 0:
+            return celosia_wire.Const(0, 1) # TODO: Check
 
-            real_parts.append(signal[:space_idx])
-            signal = signal[space_idx + 1:]
+        elif len(real_parts) == 1:
+            return real_parts[0]
 
-        return real_parts
+        else:
+            return celosia_wire.Concat(real_parts[::-1])
+
+    def _get_raw_signals(self, signal: Any) -> list[Union[rtlil.Wire, rtlil.Cell]]:
+        converted = self._convert_signals(signal)
+
+        ret = []
+
+        if isinstance(converted, celosia_wire.Const):
+            pass
+        elif isinstance(converted, celosia_wire.Slice):
+            ret.append(converted.wire)
+        elif isinstance(converted, celosia_wire.Concat):
+            for part in converted.parts:
+                ret.extend(self._get_raw_signals(part))
+        elif isinstance(converted, celosia_wire.Cell):
+            pass    # TODO: What do we do here?
+        elif isinstance(converted, celosia_wire.Wire):
+            ret.append(converted)
+        else:
+            raise RuntimeError(f"Unknown signal type: {type(signal)}")
+
+        return ret
 
     @classmethod
     def _concat(cls, parts) -> str:
         return str(parts)
 
     @classmethod
-    def _get_slice(cls, name: str, start: int, stop: int = None) -> str:
+    def _slice_repr(cls, name: str, start: int, stop: int = None) -> str:
         return ''
 
-    def _get_mem_slice(self, idx: MemoryIndex):
-        const_params = utils.const_params(idx.address)
-        if const_params is not None:
-            _, address = const_params
-        else:
-            address = self._get_signal_name(idx.address)
-        return self._get_slice(idx.name, address, address)
+    def _mem_slice_repr(self, idx: celosia_wire.MemoryIndex):
+        return self._slice_repr(idx.name, self._represent(idx.address))
 
     def _signed_division_fix(self, division: rtlil.Cell):
         DIVISION_OPERATORS = {
@@ -516,27 +547,28 @@ class Module(rtlil.Module):
             return
 
         operands = []
-        widths = []
         for port in ('A', 'B'):
-            operands.append(self._get_signal_name(division.ports[port]))
-            widths.append(division.parameters[f'{port}_WIDTH'])
+            operands.append(self._convert_signals(division.ports[port]))
 
-        max_size = max(widths) + 2
+        max_size = max(operand.width for operand in operands) + 2
 
-        dividend = self.wire(max_size)
-        divisor = self.wire(max_size)
+        dividend = celosia_wire.Wire(self.wire(max_size))
+        divisor = celosia_wire.Wire(self.wire(max_size))
 
-        # TODO: Maybe Cat(operand, operand[-1], operand[-1], ...) to align with Amaranth's way
-        self.connections.append((dividend.name, self._signed(operands[0])))
-        self.connections.append((divisor.name, self._signed(operands[1])))
+        # for operand in operands:
+
+        sign_bits0 = [operands[0][-1] for _ in range(max_size - operands[0].width)]
+        sign_bits1 = [operands[1][-1] for _ in range(max_size - operands[1].width)]
+        self.connect(dividend, celosia_wire.Concat([operands[0], *sign_bits0]))
+        self.connect(divisor, celosia_wire.Concat([operands[1], *sign_bits1]))
 
         # dividend[-1] == divisor[-1]
         cmp_sign = self.wire(1)
-        self._emitted_operators.append(rtlil.Cell(kind = '$eq', name=None,
+        self.cell(kind = '$eq', name=None,
             ports = {
-                'A': self._get_slice(dividend.name, max_size-1),
-                'B': self._get_slice(divisor.name, max_size-1),
-                'Y': cmp_sign.name,
+                'A': dividend[max_size-1],
+                'B': divisor[max_size-1],
+                'Y': cmp_sign,
             },
             parameters = {
                 'A_WIDTH': 1,
@@ -544,15 +576,15 @@ class Module(rtlil.Module):
                 'B_WIDTH': 1,
                 'B_SIGNED': False,
             }
-        ))
+        )
 
         # dividend == 0
         cmp_zero = self.wire(1)
-        self._emitted_operators.append(rtlil.Cell(kind = '$eq', name=None,
+        self.cell(kind = '$eq', name=None,
             ports = {
-                'A': dividend.name,
-                'B': self._const_repr(max_size, 0),
-                'Y': cmp_zero.name,
+                'A': dividend,
+                'B': celosia_wire.Const(0, max_size),
+                'Y': cmp_zero,
             },
             parameters = {
                 'A_WIDTH': max_size,
@@ -561,15 +593,15 @@ class Module(rtlil.Module):
                 'B_SIGNED': True,
                 'Y_WIDTH': 1,
             }
-        ))
+        )
 
         # divisor + 1
         addition = self.wire(max_size)
-        self._emitted_operators.append(rtlil.Cell(kind='$add', name=None,
+        self.cell(kind='$add', name=None,
             ports = {
-                'A': divisor.name,
-                'B': self._const_repr(max_size, 1),
-                'Y': addition.name,
+                'A': divisor,
+                'B': celosia_wire.Const(1, max_size),
+                'Y': addition,
             },
             parameters = {
                 'A_WIDTH': max_size,
@@ -577,15 +609,15 @@ class Module(rtlil.Module):
                 'B_WIDTH': max_size,
                 'B_SIGNED': True,
             }
-        ))
+        )
 
         # divisor - 1
         substraction = self.wire(max_size)
-        self._emitted_operators.append(rtlil.Cell(kind='$sub', name=None,
+        self.cell(kind='$sub', name=None,
             ports = {
-                'A': divisor.name,
-                'B': self._const_repr(max_size, 1),
-                'Y': substraction.name,
+                'A': divisor,
+                'B': celosia_wire.Const(1, max_size),
+                'Y': substraction,
             },
             parameters = {
                 'A_WIDTH': max_size,
@@ -593,26 +625,26 @@ class Module(rtlil.Module):
                 'B_WIDTH': max_size,
                 'B_SIGNED': True,
             }
-        ))
+        )
 
         # divisor[-1] ? (divisor + 1) : (divisor - 1)
         substraction_mux = self.wire(max_size)
-        self._emitted_operators.append(rtlil.Cell(kind = '$mux', name = None,
+        self.cell(kind = '$mux', name = None,
             ports = {
-                'S': self._get_slice(divisor.name, max_size - 1),
-                'A': substraction.name,
-                'B': addition.name,
-                'Y': substraction_mux.name,
+                'S': divisor[-1],
+                'A': substraction,
+                'B': addition,
+                'Y': substraction_mux,
             },
-        ))
+        )
 
         # dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1))
         mux_false_operand = self.wire(max_size)
-        self._emitted_operators.append(rtlil.Cell(kind='$sub', name=None,
+        self.cell(kind='$sub', name=None,
             ports = {
-                'A': dividend.name,
-                'B': substraction_mux.name,
-                'Y': mux_false_operand.name,
+                'A': dividend,
+                'B': substraction_mux,
+                'Y': mux_false_operand,
             },
             parameters = {
                 'A_WIDTH': max_size,
@@ -620,15 +652,15 @@ class Module(rtlil.Module):
                 'B_WIDTH': max_size,
                 'B_SIGNED': True,
             }
-        ))
+        )
 
         # (dividend[-1] == divisor[-1]) | (dividend == 0)
         mux_sel = self.wire(1)
-        self._emitted_operators.append(rtlil.Cell(kind = '$or', name=None,
+        self.cell(kind = '$or', name=None,
             ports = {
-                'A': cmp_sign.name,
-                'B': cmp_zero.name,
-                'Y': mux_sel.name,
+                'A': cmp_sign,
+                'B': cmp_zero,
+                'Y': mux_sel,
             },
             parameters = {
                 'A_WIDTH': 1,
@@ -637,23 +669,23 @@ class Module(rtlil.Module):
                 'B_SIGNED': False,
                 'Y_WIDTH': 1,
             }
-        ))
+        )
 
         # (dividend[-1] == divisor[-1]) | (dividend == 0) ? dividend : (dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1)))
         real_dividend = self.wire(max_size)
-        self._emitted_operators.append(rtlil.Cell(kind = '$mux', name = None,
+        self.cell(kind = '$mux', name = None,
             ports = {
-                'S': mux_sel.name,
-                'A': mux_false_operand.name,
-                'B': dividend.name,
-                'Y': real_dividend.name,
+                'S': mux_sel,
+                'A': mux_false_operand,
+                'B': dividend,
+                'Y': real_dividend,
             },
-        ))
+        )
 
         self._emitted_operators.append(rtlil.Cell(kind = division.kind, name = None,
             ports = {
-                'A': real_dividend.name,
-                'B': divisor.name,
+                'A': celosia_wire.Wire(real_dividend),
+                'B': divisor,
                 'Y': division.ports['Y'],
             },
             parameters = {

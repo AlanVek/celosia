@@ -1,17 +1,13 @@
 from amaranth.back import rtlil
 from amaranth.hdl import _ast
-from celosia.hdl import utils
+import celosia.hdl.wire as celosia_wire
 from typing import Union
 
-class MemoryIndex:
-    def __init__(self, name, address, slice: slice = None):
-        self.name = name
-        self.address = address
-        self.slice = slice
-
 class WritePort:
-    def __init__(self, cell: rtlil.Cell, ):
+    def __init__(self, cell: rtlil.Cell, memory: rtlil.Memory):
         self.cell = cell
+        self.memory = memory
+
         self.name: str = cell.parameters['MEMID']
         self.clk_polarity: bool = cell.parameters['CLK_POLARITY']
         self.portid: int = cell.parameters['PORTID']
@@ -22,58 +18,24 @@ class WritePort:
         self.data: str = None
         self.enable: list[str] = None
 
-    def build(self, signal_map: dict[str, rtlil.Wire], collect_signals):
-        self.addr: str = self.cell.ports['ADDR']
-        data: str = self.cell.ports['DATA']
-        enable = self.cell.ports['EN']
-        clk: str = collect_signals(self.cell.ports['CLK'])[0]
-        full_en: list[str] = []
+        assert self.name == memory.name
+
+    def build(self, collect_signals):
+        self.addr = collect_signals(self.cell.ports['ADDR'])
+        self.data = collect_signals(self.cell.ports['DATA'])
+        enable = collect_signals(self.cell.ports['EN'])
+        clk = collect_signals(self.cell.ports['CLK'])
 
         process = rtlil.Process(name = None)
 
-        en_width = en_value = None
-        const_params = utils.const_params(enable)
-        if const_params is not None:
-            en_width, en_value = const_params
-            enable = [bool((en_value >> i) & 1) for i in reversed(range(en_width))]
-        else:
-            enable = collect_signals(enable, raw=True)
+        if all(enable[i] == enable[0] for i in range(enable.width)):
+            enable = enable[0]
 
-        if all(en == enable[0] for en in enable):
-            enable = [enable[0]]
-
-        for en in enable[::-1]:
-            if isinstance(en, bool):
-                full_en.append(en)
-            else:
-                raw = collect_signals(en, raw=True)
-                assert len(raw) == 1, "Internal error"
-                raw = raw[0]
-                full_en.extend(
-                    f'{raw} [{i}]' for i in range(signal_map[raw].width)
-                )
-
-        self.enable = [
-            f"1'{int(en)}" if isinstance(en, bool) else en for en in full_en
-        ]
+        full_en = [enable[i] for i in range(enable.width)]
+        self.enable = enable
 
         if self.width % len(full_en):
             raise RuntimeError("Invalid enables for write port of memory")
-
-        const_params = utils.const_params(data)
-        data_value = None
-        allow_slice = False
-        if const_params is not None:
-            _, data_value = const_params
-            self.data = data
-        else:
-            new_data = collect_signals(data)
-            if len(new_data) == 1:
-                allow_slice = True
-                self.data = new_data[0]     # TODO: Maybe check that it's not a slice already? Otherwise it will fail
-            else:
-                assert len(full_en) <= 1, "Cannot take slice of concatenation"
-                self.data = data
 
         chunk_width = self.width // len(full_en)
         start_idx = 0
@@ -82,16 +44,11 @@ class WritePort:
                 part = None
             else:
                 part = slice(start_idx, start_idx + chunk_width)
-            lhs = MemoryIndex(self.name, self.addr, part)
 
-            if data_value is None:
-                if allow_slice:
-                    rhs = f'{self.data} [{start_idx+chunk_width-1}:{start_idx}]'
-                else:
-                    rhs = f'{self.data}'
-            else:
-                rhs = _ast.Const((data_value >> start_idx) & int('1' * chunk_width, 2), chunk_width)
-
+            lhs = celosia_wire.MemoryIndex(self.memory, self.addr)
+            if part is not None:
+                lhs = celosia_wire.Slice(lhs, part.start, part.stop)
+            rhs = self.data[start_idx : start_idx + chunk_width]
             if enable == True:
                 process.assign(lhs, rhs)
             elif enable != False:
@@ -102,8 +59,9 @@ class WritePort:
         return (clk, process)
 
 class ReadPort:
-    def __init__(self, cell: rtlil.Cell, portid: int):
+    def __init__(self, cell: rtlil.Cell, memory: rtlil.Memory, portid: int):
         self.cell = cell
+        self.memory = memory
 
         self.portid = portid
         self.name: str = cell.parameters['MEMID']
@@ -112,34 +70,33 @@ class ReadPort:
         self.clk_polarity: bool = cell.parameters['CLK_POLARITY']
         self.transparency_mask: int = cell.parameters['TRANSPARENCY_MASK'].value
 
-        self.proxy: rtlil.Wire = None
+        self.proxy: celosia_wire.Wire = None
+
+        assert self.name == memory.name
 
     def build(self, collect_signals, new_signal_creator, write_ports: dict[int, WritePort] = None):
         write_ports = write_ports or {}
         ret_process: tuple[str, rtlil.Process] = None
-        connection: tuple[str, Union[str, MemoryIndex]] = None
+        connection: tuple[str, Union[str, celosia_wire.MemoryIndex]] = None
 
-        enable: str = self.cell.ports['EN']
-        data: str = self.cell.ports['DATA']
-        addr: str = self.cell.ports['ADDR']
+        enable = collect_signals(self.cell.ports['EN'])
+        data = collect_signals(self.cell.ports['DATA'])
+        addr = collect_signals(self.cell.ports['ADDR'])
 
         if self.clk_enable:
-            clk = collect_signals(self.cell.ports['CLK'])[0]
+            clk = collect_signals(self.cell.ports['CLK'])
             process = rtlil.Process(name=None)
 
-            self.proxy = new_signal_creator(self.width, name = f'_{self.portid}_')
+            self.proxy = celosia_wire.Wire(new_signal_creator(self.width, name = f'_{self.portid}_'))
 
-            const_params = utils.const_params(enable)
-            if const_params is None:
+            if not isinstance(enable, celosia_wire.Const):
                 assigner = process.switch(enable).case('1')
+            elif enable[0].value:
+                assigner = process
             else:
-                width, value = const_params
-                if value & 1:
-                    assigner = process
-                else:
-                    return None, (data, f"{self.width}'0")
+                return None, (data, celosia_wire.Const(0, self.width))
 
-            assigner.assign(self.proxy.name,  MemoryIndex(self.name, addr))
+            assigner.assign(self.proxy.name, celosia_wire.MemoryIndex(self.memory, addr))
 
             port_id = 0
             while True:
@@ -160,18 +117,15 @@ class ReadPort:
                 if wp.enable is None:
                     continue
 
-                chunk_width = self.width // len(wp.enable)
+                chunk_width = self.width // wp.enable.width
                 start_idx = 0
-                for en in wp.enable:
+
+                for i in range(wp.enable.width):
+                    en = wp.enable[i]
 
                     if wp.addr is None or wp.data is None:
                         start_idx += chunk_width
                         continue
-
-                    if len(wp.enable) == 1:
-                        index = ''
-                    else:
-                        index = f' [{start_idx+chunk_width-1}:{start_idx}]'
 
                     # en && (wp.addr == addr)
                     sel = rtlil.Cell(
@@ -204,15 +158,7 @@ class ReadPort:
                         },
                     )
 
-                    const_params = utils.const_params(wp.data)
-                    if const_params is not None:
-                        _, data_value = const_params
-                        wp_data = (data_value >> start_idx) & int('1' * chunk_width, 2)
-                        wp_data = f"{chunk_width}'{wp_data}"
-                    else:
-                        wp_data = f'{wp.data}{index}'
-
-                    assigner.switch(sel).case(['1']).assign(f'{self.proxy.name}{index}', f'{wp_data}')
+                    assigner.switch(sel).case(['1']).assign(self.proxy[start_idx : start_idx + chunk_width], wp.data[start_idx : start_idx + chunk_width])
 
                     start_idx += chunk_width
 
@@ -220,7 +166,7 @@ class ReadPort:
             connection = (data, self.proxy.name)
 
         else:
-            connection = (data, MemoryIndex(self.name, addr))
+            connection = (data, celosia_wire.MemoryIndex(self.memory, addr))
 
         return ret_process, connection
 
@@ -237,39 +183,33 @@ class Memory(rtlil.Wire):
         self.wps: list[WritePort] = []
 
     def set_cell(self, cell: rtlil.Cell):
-        init: str = cell.ports.get('DATA', None)
+        init = celosia_wire.Const.from_string(cell.ports.get('DATA', None))
         if init is not None:
             mem_size = self.memory.depth * self.width
 
-            header = f"{mem_size}'"
-            if not init.startswith(header):
-                raise RuntimeError(f"Invalid memory initializer: {init}")
+            if init.width != mem_size:
+                raise RuntimeError(f"Invalid memory initializer: {init.width} != {mem_size}")
 
-            bits = init[len(header):]
-            if len(bits) != mem_size:
-                raise RuntimeError(f"Invalid memory initializer: {len(bits)} != {mem_size}")
-
-            init_data: list[_ast.Const] = []
-            for i in range(0, len(bits), self.width):
-                init_data.append(_ast.Const(int(bits[i : i + self.width], 2), self.width))
-            self.attributes['init'] = init_data[::-1]
+            self.attributes['init'] = [
+                init[i : i + self.width] for i in range(0, mem_size, self.width)
+            ]
 
     def add_wp(self, wp: rtlil.Cell):
-        self.wps.append(WritePort(wp))
+        self.wps.append(WritePort(wp, self.memory))
         return self.wps[-1]
 
     def add_rp(self, rp: rtlil.Cell, id: int):
-        self.rps.append(ReadPort(rp, id))
+        self.rps.append(ReadPort(rp, self.memory, id))
         return self.rps[-1]
 
-    def build(self, signal_map: dict[str, rtlil.Wire], collect_signals, new_signal_creator):
+    def build(self, collect_signals, new_signal_creator):
         processes: list[tuple[rtlil.Process, str]] = []
         connections: list[tuple[str, str]] = []
 
         write_ports = {}
 
         for wp in self.wps:
-            new_process = wp.build(signal_map, collect_signals)
+            new_process = wp.build(collect_signals)
             if new_process is not None:
                 processes.append(new_process)
             write_ports[wp.portid] = wp

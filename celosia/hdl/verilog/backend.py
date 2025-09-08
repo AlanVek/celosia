@@ -101,7 +101,7 @@ class VerilogModule(BaseModule):
 
     @classmethod
     def _concat(cls, parts) -> str:
-        return f'{{ {", ".join(parts)} }}'
+        return f'{{ {", ".join(parts[::-1])} }}'
 
     def _emit_assignment_lhs_rhs(self, lhs: str, rhs: str, symbol = '=', prefix=None, parse=True):
         if prefix is None:
@@ -110,8 +110,8 @@ class VerilogModule(BaseModule):
             prefix += ' '
 
         if parse:
-            lhs = self._get_signal_name(lhs)
-            rhs = self._get_signal_name(rhs)
+            lhs = self._represent(lhs)
+            rhs = self._represent(rhs)
 
         self._line(f'{prefix}{lhs} {symbol} {rhs};')
 
@@ -122,7 +122,7 @@ class VerilogModule(BaseModule):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=')
 
     def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
-        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=', parse=False, prefix='assign')
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=', prefix='assign')
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         super()._emit_submodule(submodule)
@@ -145,7 +145,7 @@ class VerilogModule(BaseModule):
                 with self._line.indent():
                     for i, (name, value) in enumerate(submodule.ports.items()):
                         sep = "," if i < len(submodule.ports) - 1 else ""
-                        self._line(f'.{name}({self._get_signal_name(value)}){sep}')
+                        self._line(f'.{name}({self._represent(value)}){sep}')
                 line = ')'
 
             self._line(f'{line};')
@@ -171,7 +171,7 @@ class VerilogModule(BaseModule):
                 self._line('initial begin')
                 with self._line.indent():
                     for i, value in enumerate(init):
-                        self._emit_assignment_lhs_rhs(self._get_slice(signal.name, i, i), value)
+                        self._emit_assignment_lhs_rhs(self._slice_repr(signal.name, i, i), value, parse=False)
                 self._line('end')
             else:
                 reset = '' if init is None else f' = {init}'
@@ -190,15 +190,15 @@ class VerilogModule(BaseModule):
     def _signal_is_reg(self, signal: rtlil.Wire):
         return signal.name in self._regs
 
-    def _emit_process_start(self, clock: str = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
+    def _emit_process_start(self, clock = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
         ret = super()._emit_process_start(clock, polarity, arst, arst_polarity)
 
         if clock is None:
             trigger = '*'
         else:
-            trigger = f'({"pos" if polarity else "neg"}edge {clock}'
+            trigger = f'({"pos" if polarity else "neg"}edge {self._represent(clock)}'
             if arst is not None:
-                trigger += f', {"pos" if arst_polarity else "neg"}edge {arst}'
+                trigger += f', {"pos" if arst_polarity else "neg"}edge {self._represent(arst)}'
             trigger += ')'
 
         self._line(f'always @ {trigger} begin')
@@ -209,7 +209,7 @@ class VerilogModule(BaseModule):
         self._line('end')
 
     @classmethod
-    def _get_slice(cls, name: str, start: int, stop: int=None) -> str:
+    def _slice_repr(cls, name: str, start: int, stop: int=None) -> str:
         if stop is None or stop == start:
             idx = start
         else:
@@ -254,7 +254,7 @@ class VerilogModule(BaseModule):
 
         # TODO: We can probably break early if LHS is never a concatenation
         if isinstance(assignment, rtlil.Assignment):
-            ret.update(self._get_raw_signals(assignment.lhs))
+            ret.update(wire.name for wire in self._get_raw_signals(assignment.lhs))
 
         elif isinstance(assignment, rtlil.Switch):
             for case in assignment.cases:
@@ -272,7 +272,7 @@ class VerilogModule(BaseModule):
                 self._regs.update(self._collect_lhs(content))
 
         for flip_flop in self._emitted_flip_flops:
-            self._regs.update(self._get_raw_signals(flip_flop.ports['Q']))
+            self._regs.update(wire.name for wire in self._get_raw_signals(flip_flop.ports['Q']))
 
         for memory in self._emitted_memories.values():
             self._regs.add(memory.name)
@@ -280,7 +280,7 @@ class VerilogModule(BaseModule):
     def _signed(self, value) -> str:
         return f'$signed({value})'
 
-    def _operator_rhs(self, operator: rtlil.Cell) -> str:
+    def _operator_repr(self, operator: rtlil.Cell) -> str:
         # TODO: Any issues with constant unary?
         UNARY_OPERATORS = {
             "$neg": "-",
@@ -316,7 +316,7 @@ class VerilogModule(BaseModule):
         if operator.kind in UNARY_OPERATORS:
             operands = []
             for port in ('A',):
-                operand = self._get_signal_name(operator.ports[port])
+                operand = self._represent(operator.ports[port])
                 if operator.parameters[f'{port}_SIGNED']:
                     operand = self._signed(operand)
                 operands.append(operand)
@@ -326,7 +326,7 @@ class VerilogModule(BaseModule):
         elif operator.kind in BINARY_OPERATORS:
             operands = []
             for port in ('A', 'B'):
-                operand = self._get_signal_name(operator.ports[port])
+                operand = self._represent(operator.ports[port])
                 if operator.parameters[f'{port}_SIGNED']:
                     operand = self._signed(operand)
                 operands.append(operand)
@@ -336,7 +336,7 @@ class VerilogModule(BaseModule):
         elif operator.kind == '$mux':
             operands = []
             for port in ('S', 'B', 'A'):
-                operands.append(self._get_signal_name(operator.ports[port]))
+                operands.append(self._represent(operator.ports[port]))
             rhs = f'{operands[0]} ? {operands[1]} : {operands[2]}'
 
         if rhs is None:
