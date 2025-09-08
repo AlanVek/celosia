@@ -108,6 +108,10 @@ class Module(rtlil.Module):
         for signal in self._signals.values():
             self._emit_signal(signal)
 
+        # After this point, all signals have been emitted
+        # We have this callback so subclasses can gather all the information they may need before starting
+        self._emit_post_callback()
+
         for flip_flop in self._emitted_flip_flops:
             self._emit_flip_flop(flip_flop)
 
@@ -126,6 +130,9 @@ class Module(rtlil.Module):
         self._line()
 
     def _emit_pre_callback(self):
+        pass
+
+    def _emit_post_callback(self):
         pass
 
     @classmethod
