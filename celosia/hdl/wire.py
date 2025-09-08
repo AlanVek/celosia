@@ -86,7 +86,7 @@ class Slice(Wire):
         return False
 
 class Concat(Wire):
-    def __init__(self, wires: list[Union[Wire, _ast.Const]]):
+    def __init__(self, wires: list[Wire]):
         self.parts = self._cleanup(wires)
         self.width = sum(wire.width for wire in wires)
 

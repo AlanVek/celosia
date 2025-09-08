@@ -20,11 +20,11 @@ class WritePort:
 
         assert self.name == memory.name
 
-    def build(self, collect_signals):
-        self.addr = collect_signals(self.cell.ports['ADDR'])
-        self.data = collect_signals(self.cell.ports['DATA'])
-        enable = collect_signals(self.cell.ports['EN'])
-        clk = collect_signals(self.cell.ports['CLK'])
+    def build(self):
+        self.addr = self.cell.ports['ADDR']
+        self.data = self.cell.ports['DATA']
+        enable = self.cell.ports['EN']
+        clk = self.cell.ports['CLK']
 
         process = rtlil.Process(name = None)
 
@@ -74,17 +74,17 @@ class ReadPort:
 
         assert self.name == memory.name
 
-    def build(self, collect_signals, new_signal_creator, write_ports: dict[int, WritePort] = None):
+    def build(self, new_signal_creator, write_ports: dict[int, WritePort] = None):
         write_ports = write_ports or {}
         ret_process: tuple[str, rtlil.Process] = None
         connection: tuple[str, Union[str, celosia_wire.MemoryIndex]] = None
 
-        enable = collect_signals(self.cell.ports['EN'])
-        data = collect_signals(self.cell.ports['DATA'])
-        addr = collect_signals(self.cell.ports['ADDR'])
+        enable = self.cell.ports['EN']
+        data = self.cell.ports['DATA']
+        addr = self.cell.ports['ADDR']
 
         if self.clk_enable:
-            clk = collect_signals(self.cell.ports['CLK'])
+            clk = self.cell.ports['CLK']
             process = rtlil.Process(name=None)
 
             self.proxy = celosia_wire.Wire(new_signal_creator(self.width, name = f'_{self.portid}_'))
@@ -183,7 +183,7 @@ class Memory(rtlil.Wire):
         self.wps: list[WritePort] = []
 
     def set_cell(self, cell: rtlil.Cell):
-        init = celosia_wire.Const.from_string(cell.ports.get('DATA', None))
+        init: celosia_wire.Const = cell.ports.get('DATA', None)
         if init is not None:
             mem_size = self.memory.depth * self.width
 
@@ -202,20 +202,20 @@ class Memory(rtlil.Wire):
         self.rps.append(ReadPort(rp, self.memory, id))
         return self.rps[-1]
 
-    def build(self, collect_signals, new_signal_creator):
+    def build(self, new_signal_creator):
         processes: list[tuple[rtlil.Process, str]] = []
         connections: list[tuple[str, str]] = []
 
         write_ports = {}
 
         for wp in self.wps:
-            new_process = wp.build(collect_signals)
+            new_process = wp.build()
             if new_process is not None:
                 processes.append(new_process)
             write_ports[wp.portid] = wp
 
         for rp in self.rps:
-            new_process, new_connection = rp.build(collect_signals, new_signal_creator, write_ports)
+            new_process, new_connection = rp.build(new_signal_creator, write_ports)
 
             if new_process is not None:
                 processes.append(new_process)

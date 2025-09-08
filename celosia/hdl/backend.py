@@ -60,6 +60,10 @@ class Module(rtlil.Module):
     def cell(self, *args, **kwargs):
         cell = super().cell(*args, **kwargs)
         cell.name = self.sanitize(cell.name)
+
+        for key, value in cell.ports.items():
+            cell.ports[key] = self._convert_signals(value)
+
         if self._cell_is_submodule(cell):
             self._emitted_submodules.append(cell)
         elif self._cell_is_ff(cell):
@@ -259,7 +263,7 @@ class Module(rtlil.Module):
         self._emit_switch_end()
 
     def _emit_if(self, switch: rtlil.Switch, comb=True):
-        sel = self._collect_signals(switch.sel)
+        sel = self._convert_signals(switch.sel)
         first = True
 
         for case in switch.cases:
@@ -334,7 +338,7 @@ class Module(rtlil.Module):
         pass
 
     def _emit_memory(self, memory: Memory):
-        processes, connections = memory.build(self._collect_signals, self.wire)
+        processes, connections = memory.build(self.wire)
 
         for clk, process in processes:
             kwargs = {}
@@ -397,12 +401,6 @@ class Module(rtlil.Module):
     @staticmethod
     def _const_repr(width, value):
         return ''
-
-    def _collect_signals(self, signal: Union[str, _ast.Const], raw=False) -> Union[celosia_wire.Wire, list[celosia_wire.Wire]]:
-        if raw:
-            return self._get_raw_signals(signal)
-        else:
-            return self._convert_signals(signal)
 
     def _represent(self, signal: celosia_wire.Wire) -> str:
         if signal is None:
