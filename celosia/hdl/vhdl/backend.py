@@ -5,6 +5,7 @@ from amaranth.back import rtlil
 
 class VHDLModule(BaseModule):
     submodules_first = True
+    case_sensitive = False
 
     protected = [
         'abs',                  'access',         'after',          'alias',          'all',
@@ -107,7 +108,7 @@ class VHDLModule(BaseModule):
     def _concat(cls, parts) -> str:
         return f'( {" & ".join(parts[::-1])} )'
 
-    def _emit_assignment_lhs_rhs(self, lhs: Any, rhs: Any, parse=True, need_cast=False):
+    def _emit_assignment_lhs_rhs(self, lhs: Any, rhs: Any, parse=True, need_cast=False, posfix=None):
         need_fill = False
         if parse:
             lhs_parsed = self._convert_signals(lhs)
@@ -123,19 +124,17 @@ class VHDLModule(BaseModule):
             if need_fill:
                 rhs = f"({rhs_parsed.width-1} downto 0 => {rhs}, others => '0')"
 
-        if need_cast:
-            if need_fill:
-                rhs = f"std_logic_vector'{rhs}"
-            else:
-                rhs = f"std_logic_vector({rhs})"
+        if need_cast and not need_fill:
+            rhs = f"std_logic_vector({rhs})"
 
-        self._line(f'{lhs} <= {rhs};')
+        posfix = '' if posfix is None else f' {posfix}'
+        self._line(f'{lhs} <= {rhs}{posfix};')
 
     def _emit_assignment(self, assignment: rtlil.Assignment):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
 
     def _emit_process_assignment(self, assignment: rtlil.Assignment, comb = True):
-        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, posfix=None if comb else 'after 1 fs')
 
     def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
         need_cast = assignment.rhs.kind not in {
@@ -146,6 +145,10 @@ class VHDLModule(BaseModule):
             "$gt",
             "$le",
             "$ge",
+            "$reduce_bool",
+            "$reduce_or",
+            "$reduce_and",
+            "$reduce_xor",
         }
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, need_cast=need_cast)
 
@@ -214,9 +217,10 @@ class VHDLModule(BaseModule):
             self._line('port (')
             with self._line.indent():
                 for i, port in enumerate(self._emitted_ports):
-                    reset = " := (others => '0')" if port.port_kind in ('i', 'io') else ''
+                    init = self._get_initial(port)
+                    reset = "(others => '0')" if init is None else init
                     sep = '' if i >= len(self._emitted_ports) - 1 else ';'
-                    self._line(f'{port.name}: {kind_map[port.port_kind]} std_logic_vector({port.width-1} downto 0){reset}{sep}')
+                    self._line(f'{port.name}: {kind_map[port.port_kind]} std_logic_vector({port.width-1} downto 0) := {reset}{sep}')
             self._line(');')
         self._line(f'end {self.name};')
 
@@ -248,7 +252,7 @@ class VHDLModule(BaseModule):
             # TODO: Nasty
             self._curr_line_manager.append(self._line.indent())
             self._curr_line_manager[-1].__enter__()
-            self._line(f'if ({trigger}) then')
+            self._line(f'if {trigger} then')
 
         return ret
 
@@ -290,10 +294,10 @@ class VHDLModule(BaseModule):
         self._line('end rtl;')
 
     def _emit_if_start(self, sel: str):
-        self._line(f'if ({sel}) then')
+        self._line(f'if {sel} then')
 
     def _emit_elseif_start(self, sel: str):
-        self._line(f'elsif ({sel}) then')
+        self._line(f'elsif {sel} then')
 
     def _emit_else(self):
         self._line(f'else')
@@ -345,10 +349,6 @@ class VHDLModule(BaseModule):
         UNARY_OPERATORS = {
             "$neg": "-",
             "$not": "not",
-            "$reduce_bool": "or",    # TODO: Check
-            "$reduce_or": "or",
-            "$reduce_and": "and",
-            "$reduce_xor": "xor",
         }
         BINARY_OPERATORS = {
             "$add": '+',
@@ -367,7 +367,14 @@ class VHDLModule(BaseModule):
             "$sshr": 'shift_right', # TODO: Check sign?
         }
 
-        BOOL_OPERATORS = {
+        BOOL_OPERATORS_UNARY = {
+            "$reduce_bool": "or",    # TODO: Check
+            "$reduce_or": "or",
+            "$reduce_and": "and",
+            "$reduce_xor": "xor",
+        }
+
+        BOOL_OPERATORS_BINARY = {
             "$eq": '=',
             "$ne": '!=',
             "$lt": '<',
@@ -376,40 +383,41 @@ class VHDLModule(BaseModule):
             "$ge": '>=',
         }
 
-        BINARY_OPERATORS.update(BOOL_OPERATORS)
+        UNARY_OPERATORS.update(BOOL_OPERATORS_UNARY)
+        BINARY_OPERATORS.update(BOOL_OPERATORS_BINARY)
 
         rhs = None
 
-        if operator.kind in UNARY_OPERATORS:
+        target_width = celosia_wire.Cell(operator).width
+
+        if (operator.kind in BOOL_OPERATORS_BINARY | BOOL_OPERATORS_UNARY) and not boolean:
+            rhs = f'"1" when {self._operator_repr(operator, boolean=True)} else "0"'
+
+        elif operator.kind in UNARY_OPERATORS:
             operands = []
             for port in ('A',):
-                operand = self._convert_signals(operator.ports[port])
-                operand = self._signed(operand, operator.parameters[f'{port}_SIGNED'])
-                operands.append(operand)
+                operands.append(self._resize_and_sign(
+                    value = self._convert_signals(operator.ports[port]),
+                    width = target_width,
+                    signed = operator.parameters[f'{port}_SIGNED'],
+                    ignore_size = operator.kind != '$neg',
+                ))
 
             rhs = f'{UNARY_OPERATORS[operator.kind]} {operands[0]}'
 
-        elif operator.kind in BOOL_OPERATORS and not boolean:
-            return f'"1" when {self._operator_repr(operator, boolean=True)} else "0"'
-
         elif operator.kind in BINARY_OPERATORS:
-            target_width = operator.parameters['Y_WIDTH']
             operands = []
             for port in ('A', 'B'):
-                operand = self._convert_signals(operator.ports[port])
-
-                operand = self._resize_and_sign(
-                    value = operand,
+                operands.append(self._resize_and_sign(
+                    value = self._convert_signals(operator.ports[port]),
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
-                    ignore_size = operator.kind in BOOL_OPERATORS
-                )
-                operands.append(operand)
+                    ignore_size = operator.kind in (BOOL_OPERATORS_BINARY | {'$mul': '*'}),
+                ))
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
 
         elif operator.kind in SHIFT_OPERATORS:
-            target_width = operator.parameters['Y_WIDTH']
             resize_output = False
             operands = []
             for i, port in enumerate(('A', 'B')):
@@ -439,7 +447,6 @@ class VHDLModule(BaseModule):
                 rhs = f'{rhs}({target_width-1} downto 0)'
 
         elif operator.kind == '$mux':
-            target_width = operator.parameters['WIDTH']
             operands = []
             for i, port in enumerate(('S', 'B', 'A')):
                 operand = self._convert_signals(operator.ports[port])
@@ -466,13 +473,13 @@ class VHDLModule(BaseModule):
         return self._slice_repr(idx.name, f'to_integer({self._represent(idx.address)}')
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
-        ignore_unused = False
+        self._strip_unused_cases(switch)
+
         if not self._is_switch_if(switch):
             for case in switch.cases:
                 if not case.patterns:
                     break
             else:
                 switch.default()
-                ignore_unused = True
 
-        return super()._emit_switch(switch, comb=comb, ignore_unused=ignore_unused)
+        return super()._emit_switch(switch, comb=comb, ignore_unused=True)

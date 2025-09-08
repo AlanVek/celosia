@@ -10,6 +10,7 @@ from amaranth.hdl import _ast
 class Module(rtlil.Module):
 
     submodules_first = False
+    case_sensitive = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -26,6 +27,7 @@ class Module(rtlil.Module):
         self._emitted_divisions: list[rtlil.Cell] = []
 
         self.name = self.sanitize(self.name)
+        self._assigned_names: set[str] = set()
 
         self._process_id = 0
         self._rp_count = 0
@@ -47,9 +49,38 @@ class Module(rtlil.Module):
             ret = ret[1:]
         return ret
 
+    @classmethod
+    def _change_case(cls, name: str) -> str:
+        return name if cls.case_sensitive else name.lower()
+
+    def _filter_name(self, name: str) -> str:
+        # TODO: Check name case and filter duplicated
+        return self.sanitize(name)
+        name = self.sanitize(name)
+
+        curr_num = ''
+        curr_idx = len(name) - 1
+        while curr_idx >= 0 and name[curr_idx].isnumeric():
+            curr_num = name[curr_idx] + curr_num
+            curr_idx -= 1
+
+        if curr_num:
+            idx = int(curr_num) + 1
+            _name = name[:curr_idx+1]
+        else:
+            idx = 0
+            _name = name
+
+        while self._change_case(name) in self._assigned_names:
+            name = f'{_name}{idx}'
+            idx += 1
+
+        self._assigned_names.add(name)
+        return name
+
     def wire(self, *args, **kwargs):
         wire = super().wire(*args, **kwargs)
-        wire.name = self.sanitize(wire.name)
+        wire.name = self._filter_name(wire.name)
         self._signals[wire.name] = wire
         if wire.port_kind is not None:
             self._emitted_ports.append(wire)
@@ -62,7 +93,7 @@ class Module(rtlil.Module):
 
     def cell(self, *args, **kwargs):
         cell = super().cell(*args, **kwargs)
-        cell.name = self.sanitize(cell.name)
+        cell.name = self._filter_name(cell.name)
 
         for key, value in cell.ports.items():
             cell.ports[key] = self._convert_signals(value)
@@ -87,7 +118,7 @@ class Module(rtlil.Module):
 
     def memory(self, *args, **kwargs):
         memory = super().memory(*args, **kwargs)
-        memory.name = self.sanitize(memory.name)
+        memory.name = self._filter_name(memory.name)
         self._emitted_memories[memory.name] = self._signals[memory.name] = Memory(memory)
         return memory
 

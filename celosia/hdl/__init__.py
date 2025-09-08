@@ -17,7 +17,6 @@ class HDLExtensions(type):
 class HDL(metaclass=HDLExtensions):
     ModuleClass = Module
 
-    case_sensitive = False
     top_first = True
     open_comment = ''
     close_comment = ''
@@ -28,10 +27,6 @@ class HDL(metaclass=HDLExtensions):
     @property
     def default_extension(self) -> str:
         return type(self).default_extension
-
-    @classmethod
-    def _change_case(cls, name: str) -> str:
-        return name if cls.case_sensitive else name.lower()
 
     def convert(self, elaboratable: Any, name='top', platform=None, ports=None, **kwargs):
         from amaranth.back import verilog, rtlil
