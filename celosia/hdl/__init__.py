@@ -39,6 +39,16 @@ class HDL(metaclass=HDLExtensions):
         def _convert_rtlil_text(rtlil_text, *args, **kwargs):
             return rtlil_text
 
+        def _to_str(design, *args, **kwargs):
+            emitter = rtlil.Emitter()
+
+            modules = design.modules.values()
+            if self.ModuleClass.submodules_first:
+                modules = reversed(modules)
+            for module in modules:
+                module.emit(emitter)
+            return str(emitter)
+
         @contextmanager
         def indent(emitter: rtlil.Emitter):
             orig = emitter._indent
@@ -50,18 +60,21 @@ class HDL(metaclass=HDLExtensions):
         orig__emitter_indent = rtlil.Emitter.indent
         orig__module = rtlil.Module
         orig__const = rtlil._const
+        orig__str__ = rtlil.Design.__str__
 
         try:
             verilog._convert_rtlil_text = _convert_rtlil_text
             rtlil.Emitter.indent = indent
             rtlil.Module = self.ModuleClass
             rtlil._const = self.ModuleClass._const
+            rtlil.Design.__str__ = _to_str
             return verilog.convert(elaboratable, name=name, ports=ports, platform=platform, **kwargs)
         finally:
             verilog._convert_rtlil_text = orig__convert_rtlil_text
             rtlil.Emitter.indent = orig__emitter_indent
             rtlil.Module = orig__module
             rtlil._const = orig__const
+            rtlil.Design.__str__ = orig__str__
 
 def get_lang_map() -> dict[str, type[HDL]]:
     lang_map: dict[str, type[HDL]] = {}

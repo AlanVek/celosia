@@ -280,7 +280,7 @@ class VerilogModule(BaseModule):
     def _signed(self, value) -> str:
         return f'$signed({value})'
 
-    def _operator_repr(self, operator: rtlil.Cell) -> str:
+    def _operator_repr(self, operator: rtlil.Cell, boolean = False) -> str:
         # TODO: Any issues with constant unary?
         UNARY_OPERATORS = {
             "$neg": "-",

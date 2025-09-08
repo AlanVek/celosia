@@ -8,6 +8,9 @@ from amaranth.hdl import _ast
 # TODO: Tap into rtlil.ModuleEmitter so we can have control over Wire names
 
 class Module(rtlil.Module):
+
+    submodules_first = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._line: rtlil.Emitter = None
@@ -276,7 +279,7 @@ class Module(rtlil.Module):
         for case in switch.cases:
             if case.patterns:
                 assert len(case.patterns) == 1, "Internal error" # Should never happen
-                condition = self._represent(sel[case.patterns[0][::-1].index('1')])
+                condition = self._represent(sel[case.patterns[0][::-1].index('1')], boolean=True)
                 if first:
                     self._emit_if_start(condition)
                     first = False
@@ -338,7 +341,7 @@ class Module(rtlil.Module):
         with self._line.indent():
             self._emit_operator_assignment(rtlil.Assignment(lhs, rhs), comb=comb)
 
-    def _operator_repr(self, operator: rtlil.Cell) -> str:
+    def _operator_repr(self, operator: rtlil.Cell, boolean: bool = False) -> str:
         return ''
 
     def _emit_signal(self, signal: rtlil.Wire):
@@ -409,44 +412,57 @@ class Module(rtlil.Module):
     def _const_repr(width, value):
         return ''
 
-    def _represent(self, signal: celosia_wire.Wire) -> str:
+    def _represent(self, signal: celosia_wire.Wire, boolean = False) -> str:
         if signal is None:
             return signal
 
         if isinstance(signal, celosia_wire.Concat):
+            parts_repr = [self._represent(part, boolean=boolean) for part in signal.parts]
             if len(signal.parts) == 1:
-                return self._represent(signal.parts[0])
-            return self._concat([self._represent(part) for part in signal.parts])
+                return parts_repr[0]
+            return self._concat(parts_repr)
 
         if isinstance(signal, celosia_wire.Slice):
-            wire_rep = self._represent(signal.wire)
-            if signal.start_idx == 0 and signal.stop_idx >= signal.wire.width:
-                return wire_rep
-            return self._slice_repr(wire_rep, signal.start_idx, stop=signal.stop_idx-1)
+            if boolean:
+                return self._to_boolean(signal)
+            else:
+                wire_rep = self._represent(signal.wire, boolean=False)
+                if signal.start_idx == 0 and signal.stop_idx >= signal.wire.width:
+                    return wire_rep
+                return self._slice_repr(wire_rep, signal.start_idx, stop=signal.stop_idx-1)
 
         if isinstance(signal, (_ast.Const, celosia_wire.Const)):
+            if boolean:
+                return self._to_boolean(celosia_wire.Const(signal.value, signal.width))
             return self._const_repr(signal.width, signal.value)
 
         if isinstance(signal, celosia_wire.Cell):
-            return self._operator_repr(signal.cell)
+            return self._operator_repr(signal.cell, boolean=boolean)
 
         if isinstance(signal, rtlil.Cell):
-            return self._represent(celosia_wire.Cell(signal))
+            return self._represent(celosia_wire.Cell(signal), boolean=boolean)
 
         if isinstance(signal, celosia_wire.MemoryIndex):
             return self._mem_slice_repr(signal)
 
         if isinstance(signal, celosia_wire.Wire):
+            if boolean:
+                return self._to_boolean(signal)
             return signal.wire.name
 
         if isinstance(signal, rtlil.Wire):
+            if boolean:
+                return self._to_boolean(celosia_wire.Wire(signal))
             return signal.name
 
         # TODO: If everything else is handled correctly, this should not be needed
         if isinstance(signal, str):
-            return self._represent(self._convert_signals(signal))
+            return self._represent(self._convert_signals(signal), boolean=boolean)
 
         raise ValueError(f"Unknown type to represent: {type(signal)}")
+
+    def _to_boolean(self, signal: celosia_wire.Wire):
+        return self._represent(signal, boolean=False)
 
     def _convert_signals(self, signal: Any) -> Union[rtlil.Wire, rtlil.Cell]:
         if signal is None:

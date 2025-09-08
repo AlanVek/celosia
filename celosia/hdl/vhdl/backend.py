@@ -1,8 +1,10 @@
 from celosia.hdl.backend import Module as BaseModule
+import celosia.hdl.wire as celosia_wire
 from typing import Any, Union
 from amaranth.back import rtlil
 
 class VHDLModule(BaseModule):
+    submodules_first = True
 
     protected = [
         'abs',                  'access',         'after',          'alias',          'all',
@@ -91,44 +93,35 @@ class VHDLModule(BaseModule):
 
     @staticmethod
     def _const_repr(width, value):
+        if isinstance(value, int):
+            return f'"{format(value, f"0{width}b")}"'
         return str(value)   # TODO
-
-        if isinstance(value, str):
-
-            if '-' in value or width % 4:
-                format = 'b'
-            else:
-                format = 'h'
-                value = hex(int(value, 2))[2:]
-
-
-
-            rhs = f"{self._sign_fn(signed)}'({base}\"{format(value, f'0{width}{base}')}\")"
-
-
-            if '-' in value:
-                format = 'b'
-            else:
-                format = 'h'
-                value = hex(int(value, 2))[2:]
-
-        elif isinstance(value, int):
-            format = 'h'
-            if value < 0:
-                value += 2**int(width)
-
-            value = hex(value)[2:]
-
-        return f"{width}'{format}{value}"
 
     @classmethod
     def _concat(cls, parts) -> str:
-        return f'{{ {" & ".join(parts[::-1])} }}'
+        return f'( {" & ".join(parts[::-1])} )'
 
-    def _emit_assignment_lhs_rhs(self, lhs: str, rhs: str, parse=True):
+    def _emit_assignment_lhs_rhs(self, lhs: Any, rhs: Any, parse=True, need_cast=False):
+        need_fill = False
         if parse:
-            lhs = self._represent(lhs)
-            rhs = self._represent(rhs)
+            lhs_parsed = self._convert_signals(lhs)
+            lhs = self._represent(lhs_parsed)
+            rhs_parsed = self._convert_signals(rhs)
+
+            need_fill = lhs_parsed.width != rhs_parsed.width
+
+            # Fix: std_logic != std_logic_vector
+            need_fill |= isinstance(rhs_parsed, celosia_wire.Slice) and rhs_parsed.width == 1
+
+            rhs = self._represent(rhs_parsed)
+            if need_fill:
+                rhs = f"({rhs_parsed.width-1} downto 0 => {rhs}, others => '0')"
+
+        if need_cast:
+            if need_fill:
+                rhs = f"std_logic_vector'{rhs}"
+            else:
+                rhs = f"std_logic_vector({rhs})"
 
         self._line(f'{lhs} <= {rhs};')
 
@@ -139,13 +132,22 @@ class VHDLModule(BaseModule):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
 
     def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
-        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs)
+        need_cast = assignment.rhs.kind not in {
+            '$mux',
+            "$eq",
+            "$ne",
+            "$lt",
+            "$gt",
+            "$le",
+            "$ge",
+        }
+        self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, need_cast=need_cast)
 
     def _emit_submodule(self, submodule: rtlil.Cell):
         super()._emit_submodule(submodule)
         with self._line.indent():
             # TODO: Check instance for entity.work
-            self._line(f'{submodule.name}: {submodule.kind}')
+            self._line(f'{submodule.name}: entity work.{submodule.kind}')
             if submodule.parameters:
                 self._line('generic map (')
                 with self._line.indent():
@@ -233,38 +235,38 @@ class VHDLModule(BaseModule):
         self._line('begin')
 
         if clock is not None:
-            trigger = f'{"rising" if polarity else "falling"}_edge {clock}'
+            trigger = f'{"rising" if polarity else "falling"}_edge({self._represent(clock, boolean=True)})'
             if arst is not None:
-                trigger += f' or {"rising" if arst_polarity else "falling"}_edge {arst}'
+                trigger += f' or {"rising" if arst_polarity else "falling"}_edge({self._represent(arst, boolean=True)})'
 
             # TODO: Nasty
-            self._curr_line_manager.append(self._line.indent())
-            self._curr_line_manager[-1].__enter__()
+            # self._curr_line_manager.append(self._line.indent())
+            # self._curr_line_manager[-1].__enter__()
             self._line(f'if ({trigger}) then')
 
         return ret
 
     def _emit_process_end(self, p_id: str, comb=True):
         if not comb:
-            assert len(self._curr_line_manager)
+            # assert len(self._curr_line_manager)
             self._line('end if;')
             # TODO: Nasty x2
-            self._curr_line_manager.pop().__exit__(None, None, None)
+            # self._curr_line_manager.pop().__exit__(None, None, None)
         self._line('end process;')
 
     @classmethod
     def _slice_repr(cls, name: str, start: int, stop: int=None) -> str:
-        if stop is None or stop == start:
-            idx = start
-        else:
-            idx = f'{stop} downto {start}'
+        # if stop is None or stop == start:
+        #     idx = start
+        # else:
+        idx = f'{stop} downto {start}'
         return f'{name}({idx})'
 
     def _emit_switch_start(self, sel: str):
         self._line(f'case? ({sel}) is')
 
     def _emit_switch_end(self):
-        self._line('end case?')
+        self._line('end case?;')
 
     def _case_patterns(self, pattern: tuple[str, ...]) -> str:
         return f"{' | '.join(pattern)}"
@@ -291,13 +293,47 @@ class VHDLModule(BaseModule):
         self._line(f'else')
 
     def _emit_if_end(self):
-        self._line('end if')
+        self._line('end if;')
 
-    def _signed(self, value) -> str:
-        # TODO: This doesn't work for constants
-        return f'signed({value})'
+    def _resize_and_sign(self, value: celosia_wire.Wire, width: int, signed: bool = None, ignore_size=False) -> str:
+        need_resize = value.width != width
 
-    def _operator_repr(self, operator: rtlil.Cell) -> str:
+        if isinstance(value, celosia_wire.Const) and need_resize:
+            value.width = width
+            need_resize = False
+
+        value = self._signed(value, signed=signed)
+        if need_resize and not ignore_size:
+            value = f'resize({value}, {width})'
+
+        return value
+
+    def _signed(self, value: celosia_wire.Wire, signed: bool = None) -> str:
+        if not signed:
+            prefix = 'un'
+        if isinstance(value, celosia_wire.Const):
+            value = self._represent(value)
+            if signed is not None:
+                value = f"{prefix}signed'({value})"
+        else:
+            value = f'{prefix}signed({self._represent(value)})'
+        return value
+
+    def _to_boolean(self, signal: celosia_wire.Wire) -> str:
+        # Const
+        # if isinstance(signal, celosia_wire.Const):
+        #     return ['true' if signal.value else 'false']
+
+        if isinstance(signal, celosia_wire.Slice):
+            wire_rep = self._represent(signal.wire, boolean=False)
+            return f'{wire_rep}({signal.start_idx})'
+
+        if isinstance(signal, celosia_wire.Const):
+            return 'true' if signal.value else 'false'
+
+        return f'{signal.name}(0)'
+
+    def _operator_repr(self, operator: rtlil.Cell, boolean: bool = False) -> str:
         # TODO: Any issues with constant unary?
         UNARY_OPERATORS = {
             "$neg": "-",
@@ -313,50 +349,109 @@ class VHDLModule(BaseModule):
             "$mul": '*',
             "$divfloor": '/',
             "$modfloor": '%',
-            "$shl": '<<', # TODO: missing
-            "$shr": '>>', # TODO: missing
-            "$sshr": '>>', # TODO: Check sign? # TODO: missing
             "$and": 'and',
             "$or": 'or',
             "$xor": 'xor',
+        }
+        SHIFT_OPERATORS = {
+            "$shl": 'shift_left',
+            "$shr": 'shift_right',
+            "$shift": 'shift_right',
+            "$sshr": 'shift_right', # TODO: Check sign?
+        }
+
+        BOOL_OPERATORS = {
             "$eq": '=',
             "$ne": '!=',
             "$lt": '<',
             "$gt": '>',
             "$le": '<=',
             "$ge": '>=',
-            "$shift": '>>', # TODO: missing
         }
+
+        BINARY_OPERATORS.update(BOOL_OPERATORS)
 
         rhs = None
 
         if operator.kind in UNARY_OPERATORS:
             operands = []
             for port in ('A',):
-                operand = self._represent(operator.ports[port])
-                if operator.parameters[f'{port}_SIGNED']:
-                    operand = self._signed(operand)
+                operand = self._convert_signals(operator.ports[port])
+                operand = self._signed(operand, operator.parameters[f'{port}_SIGNED'])
                 operands.append(operand)
 
             rhs = f'{UNARY_OPERATORS[operator.kind]} {operands[0]}'
 
+        elif operator.kind in BOOL_OPERATORS and not boolean:
+            return f'"1" when {self._operator_repr(operator, boolean=True)} else "0"'
+
         elif operator.kind in BINARY_OPERATORS:
+            target_width = operator.parameters['Y_WIDTH']
             operands = []
             for port in ('A', 'B'):
-                operand = self._represent(operator.ports[port])
-                if operator.parameters[f'{port}_SIGNED']:
-                    operand = self._signed(operand)
+                operand = self._convert_signals(operator.ports[port])
+
+                operand = self._resize_and_sign(
+                    value = operand,
+                    width = target_width,
+                    signed = operator.parameters[f'{port}_SIGNED'],
+                    ignore_size = operator.kind not in BOOL_OPERATORS
+                )
                 operands.append(operand)
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
 
-        elif operator.kind == '$mux':
+        elif operator.kind in SHIFT_OPERATORS:
+            target_width = operator.parameters['Y_WIDTH']
             operands = []
-            for port in ('S', 'B', 'A'):
-                operands.append(self._represent(operator.ports[port]))
-            rhs = f'{operands[0]} ? {operands[1]} : {operands[2]}'
+            for i, port in enumerate(('A', 'B')):
+                operand = self._convert_signals(operator.ports[port])
+                operand = self._resize_and_sign(
+                    value = operand,
+                    width = target_width,
+                    signed = operator.parameters[f'{port}_SIGNED'],
+                    ignore_size = i != 0,
+                )
+
+                if i == 1:
+                    operand = f'to_integer({operand})'
+
+                operands.append(operand)
+
+            rhs = f'{SHIFT_OPERATORS[operator.kind]}({",".join(operands)})'
+
+        elif operator.kind == '$mux':
+            target_width = operator.parameters['WIDTH']
+            operands = []
+            for i, port in enumerate(('S', 'B', 'A')):
+                operand = self._convert_signals(operator.ports[port])
+
+                if i == 0:
+                    operand = self._represent(operand, boolean = True)
+                else:
+                    operand = self._resize_and_sign(
+                        value = operand,
+                        width = target_width,
+                        signed = False,
+                        ignore_size=i==0,
+                    )
+                operands.append(operand)
+
+            rhs = f'std_logic_vector({operands[1]}) when {operands[0]} else std_logic_vector({operands[2]})'
 
         if rhs is None:
             raise RuntimeError(f"Unknown operator: {operator.kind}")
 
         return rhs
+
+    def _mem_slice_repr(self, idx: celosia_wire.MemoryIndex):
+        return self._slice_repr(idx.name, f'to_integer({self._represent(idx.address)}')
+
+    def _emit_switch(self, switch: rtlil.Switch, comb=True):
+        if not self._is_switch_if(switch):
+            for case in switch.cases:
+                if not case.patterns:
+                    break
+            else:
+                switch.default()
+        return super()._emit_switch(switch, comb=comb)
