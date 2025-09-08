@@ -403,14 +403,23 @@ class VHDLModule(BaseModule):
 
         elif operator.kind in SHIFT_OPERATORS:
             target_width = operator.parameters['Y_WIDTH']
+            resize_output = False
             operands = []
             for i, port in enumerate(('A', 'B')):
                 operand = self._convert_signals(operator.ports[port])
+
+                ignore_size = True
+                if i == 0:
+                    if operand.width > target_width:
+                        resize_output = True
+                    elif operand.width < target_width:
+                        ignore_size = False
+
                 operand = self._resize_and_sign(
                     value = operand,
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
-                    ignore_size = i != 0,
+                    ignore_size = ignore_size,
                 )
 
                 if i == 1:
@@ -418,7 +427,9 @@ class VHDLModule(BaseModule):
 
                 operands.append(operand)
 
-            rhs = f'{SHIFT_OPERATORS[operator.kind]}({",".join(operands)})'
+            rhs = f'{SHIFT_OPERATORS[operator.kind]}({", ".join(operands)})'
+            if resize_output:
+                rhs = f'{rhs}({target_width-1} downto 0)'
 
         elif operator.kind == '$mux':
             target_width = operator.parameters['WIDTH']
