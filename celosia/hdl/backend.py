@@ -251,8 +251,28 @@ class Module(rtlil.Module):
 
         return True
 
-    def _emit_switch(self, switch: rtlil.Switch, comb=True):
-        # TODO: Filter empty cases
+    def _strip_unused_cases(self, switch: rtlil.Switch):
+        patterns = []
+        bits = self._convert_signals(switch.sel).width
+        for idx in reversed(range(len(switch.cases))):
+            case = switch.cases[idx]
+            case_patterns = case.patterns
+            if not case_patterns:
+                case_patterns = ('-' * bits,)
+
+            if not case.contents:
+                for pattern in patterns:
+                    if all(p == c or p == '-' or c == '-' for case_pattern in case_patterns for p, c in zip(pattern, case_pattern)):
+                        break
+                else:
+                    switch.cases.pop(idx)
+            else:
+                patterns.extend(case_patterns)
+
+    def _emit_switch(self, switch: rtlil.Switch, comb=True, ignore_unused=False):
+        if not ignore_unused:
+            self._strip_unused_cases(switch)
+
         if self._is_switch_if(switch):
             return self._emit_if(switch, comb=comb)
 

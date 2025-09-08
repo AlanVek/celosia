@@ -94,7 +94,13 @@ class VHDLModule(BaseModule):
     @staticmethod
     def _const_repr(width, value):
         if isinstance(value, int):
-            return f'"{format(value, f"0{width}b")}"'
+            if width % 4:
+                fmt = 'b'
+            else:
+                fmt = 'x'
+                width //= 4
+
+            return f'{fmt}"{format(value, f"0{width}{fmt}")}"'
         return str(value)   # TODO
 
     @classmethod
@@ -240,18 +246,18 @@ class VHDLModule(BaseModule):
                 trigger += f' or {"rising" if arst_polarity else "falling"}_edge({self._represent(arst, boolean=True)})'
 
             # TODO: Nasty
-            # self._curr_line_manager.append(self._line.indent())
-            # self._curr_line_manager[-1].__enter__()
+            self._curr_line_manager.append(self._line.indent())
+            self._curr_line_manager[-1].__enter__()
             self._line(f'if ({trigger}) then')
 
         return ret
 
     def _emit_process_end(self, p_id: str, comb=True):
         if not comb:
-            # assert len(self._curr_line_manager)
+            assert len(self._curr_line_manager)
             self._line('end if;')
             # TODO: Nasty x2
-            # self._curr_line_manager.pop().__exit__(None, None, None)
+            self._curr_line_manager.pop().__exit__(None, None, None)
         self._line('end process;')
 
     @classmethod
@@ -309,6 +315,7 @@ class VHDLModule(BaseModule):
         return value
 
     def _signed(self, value: celosia_wire.Wire, signed: bool = None) -> str:
+        prefix = ''
         if not signed:
             prefix = 'un'
         if isinstance(value, celosia_wire.Const):
@@ -395,7 +402,7 @@ class VHDLModule(BaseModule):
                     value = operand,
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
-                    ignore_size = operator.kind not in BOOL_OPERATORS
+                    ignore_size = operator.kind in BOOL_OPERATORS
                 )
                 operands.append(operand)
 
@@ -459,10 +466,13 @@ class VHDLModule(BaseModule):
         return self._slice_repr(idx.name, f'to_integer({self._represent(idx.address)}')
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
+        ignore_unused = False
         if not self._is_switch_if(switch):
             for case in switch.cases:
                 if not case.patterns:
                     break
             else:
                 switch.default()
-        return super()._emit_switch(switch, comb=comb)
+                ignore_unused = True
+
+        return super()._emit_switch(switch, comb=comb, ignore_unused=ignore_unused)
