@@ -2,7 +2,7 @@ from typing import Any
 import importlib
 import pkgutil
 from contextlib import contextmanager
-from celosia.hdl.backend import Module
+from celosia.hdl.module import Module
 
 class HDLExtensions(type):
     extensions: list[str] = []

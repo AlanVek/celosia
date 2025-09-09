@@ -1,4 +1,4 @@
-from celosia.hdl.backend import Module as BaseModule
+from celosia.hdl.module import Module as BaseModule
 from typing import Any, Union
 from amaranth.back import rtlil
 
