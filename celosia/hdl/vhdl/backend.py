@@ -35,7 +35,7 @@ class VHDLModule(BaseModule):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._types: list[str] = []
+        self._types: dict[str, tuple[str, str]] = {}
 
         self._curr_line_manager = []
 
@@ -92,9 +92,28 @@ class VHDLModule(BaseModule):
 
         return name
 
+    def memory(self, *args, **kwargs):
+        ret = super().memory(*args, **kwargs)
+
+        new_type = 'std_logic'
+        self._types[ret.name] = types = []
+        for i, size in enumerate([ret.width, ret.depth]):
+            next_type = self._filter_name(f'type_{ret.name}_{i}')
+            types.append((next_type, f'array (0 to {size - 1}) of {new_type}'))
+            new_type = next_type
+
+        return ret
+
     @staticmethod
     def _const_repr(width, value, init=False):
-        if isinstance(value, int):
+        if isinstance(value, str):
+            if '-' in value:
+                fmt = 'b'
+            else:
+                fmt = 'h'
+                value = hex(int(value, 2))[2:]
+
+        elif isinstance(value, int):
             if value < 0:
                 value += 2**width
 
@@ -109,8 +128,9 @@ class VHDLModule(BaseModule):
                 fmt = 'x'
                 width //= 4
 
-            return f'{fmt}"{format(value, f"0{width}{fmt}")}"'
-        return str(value)   # TODO
+            value = format(value, f'0{width}{fmt}')
+
+        return f'{fmt}"{value}"'
 
     @classmethod
     def _concat(cls, parts) -> str:
@@ -118,6 +138,7 @@ class VHDLModule(BaseModule):
 
     def _emit_assignment_lhs_rhs(self, lhs: Any, rhs: Any, parse=True, need_cast=False, posfix=None):
         need_fill = False
+        cast = 'std_logic_vector' if need_cast else None
         if parse:
             lhs_parsed = self._convert_signals(lhs)
             lhs = self._represent(lhs_parsed)
@@ -126,14 +147,21 @@ class VHDLModule(BaseModule):
             need_fill = lhs_parsed.width != rhs_parsed.width
 
             # Fix: std_logic != std_logic_vector
-            need_fill |= isinstance(rhs_parsed, celosia_wire.Slice) and rhs_parsed.width == 1
+            if isinstance(rhs_parsed, celosia_wire.Slice) and rhs_parsed.width == 1:
+                if not isinstance(lhs_parsed, celosia_wire.Slice):
+                    need_fill = True
 
             rhs = self._represent(rhs_parsed)
             if need_fill:
                 rhs = f"({rhs_parsed.width-1} downto 0 => {rhs}, others => '0')"
 
-        if need_cast and not need_fill:
-            rhs = f"std_logic_vector({rhs})"
+            if isinstance(lhs_parsed, celosia_wire.MemoryIndex):
+                cast = self._types[lhs_parsed.name][0][0]
+            elif isinstance(rhs_parsed, celosia_wire.MemoryIndex):
+                cast = 'std_logic_vector'
+
+        if cast is not None and not need_fill:
+            rhs = f"{cast}({rhs})"
 
         posfix = '' if posfix is None else f' {posfix}'
         self._line(f'{lhs} <= {rhs}{posfix};')
@@ -193,14 +221,15 @@ class VHDLModule(BaseModule):
             #     self._line(f'(* {key} = {self._const(attr)} *)')
 
             if depth:
-                pass
-                # TODO: Memories
-                # self._line(f'{dir}{type} {width}{signal.name} [{depth-1}:0];')
-                # self._line('initial begin')
-                # with self._line.indent():
-                #     for i, value in enumerate(init):
-                #         self._emit_assignment_lhs_rhs(self._slice_repr(signal.name, i, i), value, parse=False)
-                # self._line('end')
+                for type_name, type_def in self._types[signal.name]:
+                    self._line(f'type {type_name} is {type_def};')
+
+                self._line(f'signal {signal.name}: {type_name} := (')
+                with self._line.indent():
+                    for i, value in enumerate(init):
+                        sep = ',' if i < len(init) - 1 else ''
+                        self._line(f'{i} => {value}{sep}')
+                self._line(');')
             else:
                 reset = "(others => '0')" if init is None else init
                 self._line(f'signal {signal.name}: std_logic_vector({signal.width - 1} downto 0) := {reset};')
@@ -396,7 +425,7 @@ class VHDLModule(BaseModule):
 
         BOOL_OPERATORS_BINARY = {
             "$eq": '=',
-            "$ne": '!=',
+            "$ne": '/=',
             "$lt": '<',
             "$gt": '>',
             "$le": '<=',
@@ -496,7 +525,7 @@ class VHDLModule(BaseModule):
         return rhs
 
     def _mem_slice_repr(self, idx: celosia_wire.MemoryIndex):
-        return self._slice_repr(idx.name, f'to_integer({self._represent(idx.address)}')
+        return f'{idx.name}(to_integer({self._represent(idx.address)}))'
 
     def _emit_switch(self, switch: rtlil.Switch, comb=True):
         self._strip_unused_cases(switch)

@@ -42,15 +42,23 @@ class HDL(metaclass=HDLExtensions):
         def _new_compute_ports(netlist: _nir.Netlist):
             ret = _compute_ports(netlist)
             for module in netlist.modules:
+                assigned = module.signal_names.values() | module.ports.keys() | module.io_ports.keys()
                 for name in tuple(module.ports.keys()):
-                    module.ports[self.ModuleClass.sanitize(name)] = module.ports.pop(name)
+                    if name.startswith('port$'):
+                        new = self.ModuleClass.filter_name(name, assigned)
+                        module.ports[new] = module.ports.pop(name)
+                        assigned.add(new)
             return ret
 
         def _new_compute_io_ports(netlist: _nir.Netlist, ports):
             ret = _compute_io_ports(netlist, ports)
             for module in netlist.modules:
+                assigned = module.signal_names.values() | module.ports.keys() | module.io_ports.keys()
                 for name in tuple(module.io_ports.keys()):
-                    module.io_ports[self.ModuleClass.sanitize(name)] = module.io_ports.pop(name)
+                    if name.startswith('port$'):
+                        new = self.ModuleClass.filter_name(name, assigned)
+                        module.io_ports[new] = module.io_ports.pop(name)
+                        assigned.add(new)
             return ret
 
         def _new_convert_rtlil_text(rtlil_text, *args, **kwargs):

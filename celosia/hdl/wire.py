@@ -201,6 +201,10 @@ class Const(Wire):
         if len(string) != width:
             raise ValueError(f"Inconsistent width for const string: {string} ({width})")
 
+        # FIX: Only for case patterns, should never be converted to int
+        if '-' in string:
+            return cls(string, width)
+
         return cls(int(string, 2), width)
 
 class MemoryIndex(Wire):

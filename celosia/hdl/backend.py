@@ -27,7 +27,7 @@ class Module(rtlil.Module):
         self._emitted_divisions: list[rtlil.Cell] = []
 
         self.name = self.sanitize(self.name)
-        self._assigned_names: dict[str, str] = {}
+        self._assigned_names: set[str] = set()
 
         self._process_id = 0
         self._rp_count = 0
@@ -54,8 +54,11 @@ class Module(rtlil.Module):
         return name if cls.case_sensitive else name.lower()
 
     @classmethod
-    def filter_name(self, name: str, assigned_names: set[str]) -> str:
+    def filter_name(self, name: str, assigned_names: set[str], change_case = True) -> str:
         name = self.sanitize(name)
+
+        if change_case:
+            assigned_names = {self._change_case(name) for name in assigned_names}
 
         curr_num = ''
         curr_idx = len(name) - 1
@@ -77,9 +80,8 @@ class Module(rtlil.Module):
         return name
 
     def _filter_name(self, name: str) -> str:
-        original = name
-        name = self.filter_name(name, assigned_names=self._assigned_names)
-        self._assigned_names[original] = name
+        name = self.filter_name(name, assigned_names=self._assigned_names, change_case=False)
+        self._assigned_names.add(self._change_case(name))
         return name
 
     def wire(self, *args, **kwargs):
