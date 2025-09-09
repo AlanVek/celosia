@@ -382,6 +382,7 @@ class Module(rtlil.Module):
         pass
 
     def _emit_submodule(self, submodule: rtlil.Cell):
+        instance = '.' not in submodule.kind
         submodule.kind = self.sanitize(submodule.kind)
 
         # Shouldn't need to sanitize!
@@ -389,6 +390,10 @@ class Module(rtlil.Module):
 
         # for port in tuple(submodule.ports.keys()):
         #     submodule.ports[self.sanitize(port)] = submodule.ports.pop(port)
+
+        self._emit_submodule_post(submodule, instance = instance)
+
+    def _emit_submodule_post(self, submodule: rtlil.Cell, instance: bool):
         pass
 
     def _emit_operator(self, operator: rtlil.Cell, comb=True):

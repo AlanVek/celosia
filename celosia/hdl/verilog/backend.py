@@ -124,8 +124,7 @@ class VerilogModule(BaseModule):
     def _emit_operator_assignment(self, assignment: rtlil.Assignment, comb = True):
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, symbol = '=' if comb else '<=', prefix='assign')
 
-    def _emit_submodule(self, submodule: rtlil.Cell):
-        super()._emit_submodule(submodule)
+    def _emit_submodule_post(self, submodule: rtlil.Cell, instance: bool):
         with self._line.indent():
             line = f'{submodule.kind} '
             if submodule.parameters:

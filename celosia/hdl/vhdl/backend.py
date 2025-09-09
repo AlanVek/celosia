@@ -188,11 +188,10 @@ class VHDLModule(BaseModule):
         }
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, need_cast=need_cast)
 
-    def _emit_submodule(self, submodule: rtlil.Cell):
-        super()._emit_submodule(submodule)
+    def _emit_submodule_post(self, submodule: rtlil.Cell, instance: bool):
         with self._line.indent():
-            # TODO: Check instance for entity.work
-            self._line(f'{submodule.name}: entity work.{submodule.kind}')
+            prefix = '' if instance else 'entity work.'
+            self._line(f'{submodule.name}: {prefix}{submodule.kind}')
             if submodule.parameters:
                 self._line('generic map (')
                 with self._line.indent():
