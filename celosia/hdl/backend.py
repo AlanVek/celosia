@@ -459,15 +459,15 @@ class Module(rtlil.Module):
         ret: Union[_ast.Const, list[_ast.Const]] = signal.attributes.pop('init', None)
         if ret is not None:
             if isinstance(ret, list):
-                ret = [self._const_repr(r.width, r.value) for r in ret]
+                ret = [self._const_repr(r.width, r.value, init=True) for r in ret]
             else:
-                ret = self._const_repr(ret.width, ret.value)
+                ret = self._const_repr(ret.width, ret.value, init=True)
         else:
-            ret = self._const_repr(signal.width, 0)
+            ret = self._const_repr(signal.width, 0, init=True)
         return ret
 
     @staticmethod
-    def _const_repr(width, value):
+    def _const_repr(width, value, init=False):
         return ''
 
     def _represent(self, signal: celosia_wire.Wire, boolean = False) -> str:

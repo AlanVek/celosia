@@ -81,7 +81,7 @@ class VerilogModule(BaseModule):
         return name
 
     @staticmethod
-    def _const_repr(width, value):
+    def _const_repr(width, value, init=False):
 
         if isinstance(value, str):
             if '-' in value:

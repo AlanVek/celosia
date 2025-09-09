@@ -93,8 +93,16 @@ class VHDLModule(BaseModule):
         return name
 
     @staticmethod
-    def _const_repr(width, value):
+    def _const_repr(width, value, init=False):
         if isinstance(value, int):
+            if value < 0:
+                value += 2**width
+
+            if init:
+                bin_repr = bin(value)[2:]
+                if all(b == bin_repr[0] for b in bin_repr):
+                    return f"(others => '{bin_repr[0]}')"
+
             if width % 4:
                 fmt = 'b'
             else:
@@ -309,6 +317,13 @@ class VHDLModule(BaseModule):
         need_resize = value.width != width
 
         if isinstance(value, celosia_wire.Const) and need_resize and not ignore_size:
+            if value.value < 0:
+                value.value += 2**value.width
+
+            if width > value.width:
+                extend = value[-1].value if signed else 0
+                value.value |= int(str(extend) * (width - value.width), 2) << value.width
+
             value.width = width
             value.value &= int('1' * width, 2)
             need_resize = False
@@ -327,7 +342,7 @@ class VHDLModule(BaseModule):
             if value.value < 0:
                 value.value += 2**value.width
             if signed is not None:
-                if value.width < 32:
+                if value.value < 2**31:
                     value = f'to_{prefix}signed({value.value}, {value.width})'
                 else:
                     value = f"{prefix}signed'({self._represent(value)})"
