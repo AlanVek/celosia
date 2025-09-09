@@ -379,7 +379,7 @@ class VHDLModule(BaseModule):
     def _emit_if_end(self):
         self._line('end if;')
 
-    def _resize_and_sign(self, value: celosia_wire.Wire, width: int, signed: bool = None, ignore_size=False) -> str:
+    def _resize_and_sign(self, value: celosia_wire.Wire, width: int, signed: bool = None, ignore_size=False, boolean=False) -> str:
         need_resize = value.width != width
 
         if isinstance(value, celosia_wire.Const) and need_resize and not ignore_size:
@@ -394,13 +394,13 @@ class VHDLModule(BaseModule):
             value.value &= int('1' * width, 2)
             need_resize = False
 
-        value = self._signed(value, signed=signed)
+        value = self._signed(value, signed=signed, boolean=boolean)
         if need_resize and not ignore_size:
             value = f'resize({value}, {width})'
 
         return value
 
-    def _signed(self, value: celosia_wire.Wire, signed: bool = None) -> str:
+    def _signed(self, value: celosia_wire.Wire, signed: bool = None, boolean = False) -> str:
         prefix = ''
         if not signed:
             prefix = 'un'
@@ -408,22 +408,25 @@ class VHDLModule(BaseModule):
             if value.value < 0:
                 value.value += 2**value.width
             if signed is not None:
-                if value.value < 2**31:
+                if boolean:
+                    value = self._represent(value, boolean=boolean)
+                elif value.value < 2**31:
                     value = f'to_{prefix}signed({value.value}, {value.width})'
                 else:
-                    value = f"{prefix}signed'({self._represent(value)})"
+                    value = f"{prefix}signed'({self._represent(value, boolean=boolean)})"
         else:
-            value = f'{prefix}signed({self._represent(value)})'
+            value = self._represent(value, boolean=boolean)
+            if not boolean:
+                value = f'{prefix}signed({value})'
         return value
 
     def _to_boolean(self, signal: celosia_wire.Wire) -> str:
-        # Const
-        # if isinstance(signal, celosia_wire.Const):
-        #     return ['true' if signal.value else 'false']
-
         if isinstance(signal, celosia_wire.Slice):
-            wire_rep = self._represent(signal.wire, boolean=False)
-            return f'{wire_rep}({signal.start_idx})'
+            boolean = isinstance(signal.wire, celosia_wire.Cell)
+            wire_rep = self._represent(signal.wire, boolean=boolean)
+            if not boolean:
+                wire_rep = f'{wire_rep}({signal.start_idx})'
+            return wire_rep
 
         if isinstance(signal, celosia_wire.Const):
             return 'true' if signal.value else 'false'
@@ -487,6 +490,7 @@ class VHDLModule(BaseModule):
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
                     ignore_size = operator.kind != '$neg',
+                    boolean = boolean and operator.kind not in BOOL_OPERATORS_UNARY,    # Bool operators already generate boolean
                 ))
 
             rhs = f'{UNARY_OPERATORS[operator.kind]} {operands[0]}'
@@ -507,6 +511,7 @@ class VHDLModule(BaseModule):
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
                     ignore_size = operator.kind == '$mul',
+                    boolean = boolean and operator.kind not in BOOL_OPERATORS_BINARY,    # Bool operators already generate boolean
                 )
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
@@ -532,6 +537,7 @@ class VHDLModule(BaseModule):
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
                     ignore_size = ignore_size,
+                    boolean = False,
                 )
 
                 if i == 1:
@@ -540,7 +546,9 @@ class VHDLModule(BaseModule):
                 operands.append(operand)
 
             rhs = f'{SHIFT_OPERATORS[operator.kind]}({", ".join(operands)})'
-            if resize_output:
+            if boolean:
+                rhs = f'{rhs}(0)'
+            elif resize_output:
                 rhs = f'{rhs}({target_width-1} downto 0)'
 
         elif operator.kind == '$mux':
@@ -556,6 +564,7 @@ class VHDLModule(BaseModule):
                         width = target_width,
                         signed = False,
                         ignore_size=i==0,
+                        boolean = False,    # TODO: Is there a use case?
                     )
                 operands.append(operand)
 
