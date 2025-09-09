@@ -3,6 +3,16 @@ import importlib
 import pkgutil
 from contextlib import contextmanager
 from celosia.hdl.module import Module
+from amaranth.hdl import _ast
+
+# Overrides
+#####################################################################################################
+from amaranth.back import verilog, rtlil
+from amaranth.back.verilog import _convert_rtlil_text
+from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design
+from amaranth.hdl import _ir, _nir
+from amaranth.hdl._ir import _compute_ports, _compute_io_ports, _add_name
+#####################################################################################################
 
 class HDLExtensions(type):
     extensions: list[str] = []
@@ -27,13 +37,7 @@ class HDL(metaclass=HDLExtensions):
     def default_extension(self) -> str:
         return type(self).default_extension
 
-    def convert(self, elaboratable: Any, name='top', platform=None, ports=None, **kwargs):
-        from amaranth.back import verilog, rtlil
-        from amaranth.back.verilog import _convert_rtlil_text
-        from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design
-        from amaranth.hdl import _ir, _nir
-        from amaranth.hdl._ir import _compute_ports, _compute_io_ports, _add_name
-
+    def generate_overrides(self):
         def _new_add_name(assigned_names: set[str], name: str) -> str:
             name = self.ModuleClass.filter_name(name, assigned_names=assigned_names)
             assigned_names.add(name)
@@ -81,25 +85,31 @@ class HDL(metaclass=HDLExtensions):
             yield
             emitter._indent = orig
 
+        verilog._convert_rtlil_text = _new_convert_rtlil_text
+        rtlil.Emitter.indent = _new_indent
+        rtlil.Module = self.ModuleClass
+        rtlil._const = self.ModuleClass._const
+        rtlil.Design.__str__ = _new_to_str
+        _ir._add_name = _new_add_name
+        _ir._compute_ports = _new_compute_ports
+        _ir._compute_io_ports = _new_compute_io_ports
+
+    def cleanup_overrides(self):
+        verilog._convert_rtlil_text = _convert_rtlil_text
+        rtlil.Emitter.indent = Emitter.indent
+        rtlil.Module = rtlil_Module
+        rtlil._const = _const
+        rtlil.Design.__str__ = Design.__str__
+        _ir._add_name = _add_name
+        _ir._compute_ports = _compute_ports
+        _ir._compute_io_ports = _compute_io_ports
+
+    def convert(self, elaboratable: Any, name='top', platform=None, ports=None, **kwargs):
         try:
-            verilog._convert_rtlil_text = _new_convert_rtlil_text
-            rtlil.Emitter.indent = _new_indent
-            rtlil.Module = self.ModuleClass
-            rtlil._const = self.ModuleClass._const
-            rtlil.Design.__str__ = _new_to_str
-            _ir._add_name = _new_add_name
-            _ir._compute_ports = _new_compute_ports
-            _ir._compute_io_ports = _new_compute_io_ports
+            self.generate_overrides()
             return verilog.convert(elaboratable, name=name, ports=ports, platform=platform, **kwargs)
         finally:
-            verilog._convert_rtlil_text = _convert_rtlil_text
-            rtlil.Emitter.indent = Emitter.indent
-            rtlil.Module = rtlil_Module
-            rtlil._const = _const
-            rtlil.Design.__str__ = Design.__str__
-            _ir._add_name = _add_name
-            _ir._compute_ports = _compute_ports
-            _ir._compute_io_ports = _compute_io_ports
+            self.cleanup_overrides()
 
 def get_lang_map() -> dict[str, type[HDL]]:
     lang_map: dict[str, type[HDL]] = {}
