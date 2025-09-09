@@ -4,6 +4,8 @@ from typing import Any, Union
 from amaranth.back import rtlil
 from amaranth.hdl import _ast
 
+# TODO: Clean up -- Use resize for everything
+
 class VHDLModule(BaseModule):
     submodules_first = True
     case_sensitive = False
@@ -491,8 +493,10 @@ class VHDLModule(BaseModule):
 
         elif operator.kind in BINARY_OPERATORS:
             operands = []
+            widths = []
             for port in ('A', 'B'):
                 operands.append(self._convert_signals(operator.ports[port]))
+                widths.append(operands[-1].width)
 
             if operator.kind in BOOL_OPERATORS_BINARY:
                 target_width = max(operand.width for operand in operands)
@@ -506,6 +510,9 @@ class VHDLModule(BaseModule):
                 )
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
+
+            if operator.kind == '$mul' and sum(widths) != target_width:
+                rhs = f'resize({rhs}, {target_width})'
 
         elif operator.kind in SHIFT_OPERATORS:
             resize_output = False
