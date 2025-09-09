@@ -118,7 +118,7 @@ class VHDLModule(BaseModule):
                 value += 2**width
 
             if init:
-                bin_repr = bin(value)[2:]
+                bin_repr = format(value, f'0{width}b')
                 if all(b == bin_repr[0] for b in bin_repr):
                     return f"(others => '{bin_repr[0]}')"
 
