@@ -41,8 +41,8 @@ class VHDLModule(BaseModule):
 
         self._curr_line_manager = []
 
-    @staticmethod
-    def _const(value: Any):
+    @classmethod
+    def _const(cls, value: Any):
         if isinstance(value, str):
             value = value.replace('"', '""')
             return f'"{value}"'
@@ -264,8 +264,6 @@ class VHDLModule(BaseModule):
                 self._line(f'signal {signal.name}: std_logic_vector({max(0, signal.width - 1)} downto 0) := {reset};')
 
             for key, value in signal.attributes.items():
-                if key == 'src':
-                    continue
                 type, value, declare = self._parse_attribute(key, value)
                 if declare:
                     self._line(f'attribute {key} : {type};')
@@ -441,7 +439,7 @@ class VHDLModule(BaseModule):
             "$sub": '-',
             "$mul": '*',
             "$divfloor": '/',
-            "$modfloor": '%',
+            "$modfloor": 'rem',
             "$and": 'and',
             "$or": 'or',
             "$xor": 'xor',

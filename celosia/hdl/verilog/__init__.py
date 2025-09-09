@@ -17,14 +17,14 @@ def convert(
     ports: list[_ast.Signal] = None,
     platform = None,
     spaces: int = 4,
-    blackboxes: list[dict[str, Union[int, str, tuple]]] = None,
+    **kwargs
 ):
     return Verilog(
         spaces = spaces,
-        blackboxes = blackboxes,
     ).convert(
         elaboratable,
         name = name,
         ports = ports,
         platform = platform,
+        **kwargs
     )

@@ -25,6 +25,7 @@ def convert(
     platform = None,
     spaces: int = 4,
     blackboxes: list[dict[str, Union[int, str, tuple]]] = None,
+    **kwargs
 ):
     return VHDL(
         spaces = spaces,
@@ -34,4 +35,5 @@ def convert(
         name = name,
         platform = platform,
         ports = ports,
+        **kwargs
     )
