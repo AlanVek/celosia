@@ -27,7 +27,7 @@ class Module(rtlil.Module):
         self._emitted_divisions: list[rtlil.Cell] = []
 
         self.name = self.sanitize(self.name)
-        self._assigned_names: set[str] = set()
+        self._assigned_names: dict[str, str] = {}
 
         self._process_id = 0
         self._rp_count = 0
@@ -41,7 +41,7 @@ class Module(rtlil.Module):
         return name
 
     def _auto_name(self):
-        return self.sanitize(super()._auto_name())
+        return self._filter_name(super()._auto_name())
 
     def _name(self, name):
         ret = super()._name(name)
@@ -53,9 +53,8 @@ class Module(rtlil.Module):
     def _change_case(cls, name: str) -> str:
         return name if cls.case_sensitive else name.lower()
 
-    def _filter_name(self, name: str) -> str:
-        # TODO: Check name case and filter duplicated
-        return self.sanitize(name)
+    @classmethod
+    def filter_name(self, name: str, assigned_names: set[str]) -> str:
         name = self.sanitize(name)
 
         curr_num = ''
@@ -71,11 +70,16 @@ class Module(rtlil.Module):
             idx = 0
             _name = name
 
-        while self._change_case(name) in self._assigned_names:
+        while self._change_case(name) in assigned_names:
             name = f'{_name}{idx}'
             idx += 1
 
-        self._assigned_names.add(name)
+        return name
+
+    def _filter_name(self, name: str) -> str:
+        original = name
+        name = self.filter_name(name, assigned_names=self._assigned_names)
+        self._assigned_names[original] = name
         return name
 
     def wire(self, *args, **kwargs):
@@ -376,11 +380,13 @@ class Module(rtlil.Module):
         pass
 
     def _emit_submodule(self, submodule: rtlil.Cell):
-        submodule.name = self.sanitize(submodule.name)
-        submodule.kind = self.sanitize(submodule.kind)
+        # Shouldn't need to sanitize!
+        # submodule.name = self.sanitize(submodule.name)
+        # submodule.kind = self.sanitize(submodule.kind)
 
-        for port in tuple(submodule.ports.keys()):
-            submodule.ports[self.sanitize(port)] = submodule.ports.pop(port)
+        # for port in tuple(submodule.ports.keys()):
+        #     submodule.ports[self.sanitize(port)] = submodule.ports.pop(port)
+        pass
 
     def _emit_operator(self, operator: rtlil.Cell, comb=True):
         lhs = operator.ports.get('Y', None)
@@ -647,6 +653,7 @@ class Module(rtlil.Module):
                 'A_SIGNED': False,
                 'B_WIDTH': 1,
                 'B_SIGNED': False,
+                'Y_WIDTH': 1,
             }
         )
 
@@ -680,6 +687,7 @@ class Module(rtlil.Module):
                 'A_SIGNED': True,
                 'B_WIDTH': max_size,
                 'B_SIGNED': True,
+                'Y_WIDTH': max_size,
             }
         )
 
@@ -696,6 +704,7 @@ class Module(rtlil.Module):
                 'A_SIGNED': True,
                 'B_WIDTH': max_size,
                 'B_SIGNED': True,
+                'Y_WIDTH': max_size,
             }
         )
 
@@ -707,6 +716,9 @@ class Module(rtlil.Module):
                 'A': substraction,
                 'B': addition,
                 'Y': substraction_mux,
+            },
+            parameters = {
+                'WIDTH': max_size,
             },
         )
 
@@ -723,6 +735,7 @@ class Module(rtlil.Module):
                 'A_SIGNED': True,
                 'B_WIDTH': max_size,
                 'B_SIGNED': True,
+                'Y_WIDTH': max_size,
             }
         )
 
@@ -751,6 +764,9 @@ class Module(rtlil.Module):
                 'A': mux_false_operand,
                 'B': dividend,
                 'Y': real_dividend,
+            },
+            parameters = {
+                'WIDTH': max_size,
             },
         )
 

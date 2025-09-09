@@ -308,8 +308,9 @@ class VHDLModule(BaseModule):
     def _resize_and_sign(self, value: celosia_wire.Wire, width: int, signed: bool = None, ignore_size=False) -> str:
         need_resize = value.width != width
 
-        if isinstance(value, celosia_wire.Const) and need_resize:
+        if isinstance(value, celosia_wire.Const) and need_resize and not ignore_size:
             value.width = width
+            value.value &= int('1' * width, 2)
             need_resize = False
 
         value = self._signed(value, signed=signed)
@@ -323,9 +324,13 @@ class VHDLModule(BaseModule):
         if not signed:
             prefix = 'un'
         if isinstance(value, celosia_wire.Const):
-            value = self._represent(value)
+            if value.value < 0:
+                value.value += 2**value.width
             if signed is not None:
-                value = f"{prefix}signed'({value})"
+                if value.width < 32:
+                    value = f'to_{prefix}signed({value.value}, {value.width})'
+                else:
+                    value = f"{prefix}signed'({self._represent(value)})"
         else:
             value = f'{prefix}signed({self._represent(value)})'
         return value
@@ -408,12 +413,18 @@ class VHDLModule(BaseModule):
         elif operator.kind in BINARY_OPERATORS:
             operands = []
             for port in ('A', 'B'):
-                operands.append(self._resize_and_sign(
-                    value = self._convert_signals(operator.ports[port]),
+                operands.append(self._convert_signals(operator.ports[port]))
+
+            if operator.kind in BOOL_OPERATORS_BINARY:
+                target_width = max(operand.width for operand in operands)
+
+            for i, port in enumerate(('A', 'B')):
+                operands[i] = self._resize_and_sign(
+                    value = operands[i],
                     width = target_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
-                    ignore_size = operator.kind in (BOOL_OPERATORS_BINARY | {'$mul': '*'}),
-                ))
+                    ignore_size = operator.kind == '$mul',
+                )
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
 

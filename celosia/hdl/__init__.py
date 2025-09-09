@@ -1,4 +1,3 @@
-from amaranth.hdl import _ir
 from typing import Any
 import importlib
 import pkgutil
@@ -30,11 +29,34 @@ class HDL(metaclass=HDLExtensions):
 
     def convert(self, elaboratable: Any, name='top', platform=None, ports=None, **kwargs):
         from amaranth.back import verilog, rtlil
+        from amaranth.back.verilog import _convert_rtlil_text
+        from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design
+        from amaranth.hdl import _ir, _nir
+        from amaranth.hdl._ir import _compute_ports, _compute_io_ports, _add_name
 
-        def _convert_rtlil_text(rtlil_text, *args, **kwargs):
+        def _new_add_name(assigned_names: set[str], name: str) -> str:
+            name = self.ModuleClass.filter_name(name, assigned_names=assigned_names)
+            assigned_names.add(name)
+            return name
+
+        def _new_compute_ports(netlist: _nir.Netlist):
+            ret = _compute_ports(netlist)
+            for module in netlist.modules:
+                for name in tuple(module.ports.keys()):
+                    module.ports[self.ModuleClass.sanitize(name)] = module.ports.pop(name)
+            return ret
+
+        def _new_compute_io_ports(netlist: _nir.Netlist, ports):
+            ret = _compute_io_ports(netlist, ports)
+            for module in netlist.modules:
+                for name in tuple(module.io_ports.keys()):
+                    module.io_ports[self.ModuleClass.sanitize(name)] = module.io_ports.pop(name)
+            return ret
+
+        def _new_convert_rtlil_text(rtlil_text, *args, **kwargs):
             return rtlil_text
 
-        def _to_str(design, *args, **kwargs):
+        def _new_to_str(design: rtlil.Design, *args, **kwargs):
             emitter = rtlil.Emitter()
 
             modules = design.modules.values()
@@ -45,31 +67,31 @@ class HDL(metaclass=HDLExtensions):
             return str(emitter)
 
         @contextmanager
-        def indent(emitter: rtlil.Emitter):
+        def _new_indent(emitter: rtlil.Emitter):
             orig = emitter._indent
             emitter._indent += ' ' * self.spaces
             yield
             emitter._indent = orig
 
-        orig__convert_rtlil_text = verilog._convert_rtlil_text
-        orig__emitter_indent = rtlil.Emitter.indent
-        orig__module = rtlil.Module
-        orig__const = rtlil._const
-        orig__str__ = rtlil.Design.__str__
-
         try:
-            verilog._convert_rtlil_text = _convert_rtlil_text
-            rtlil.Emitter.indent = indent
+            verilog._convert_rtlil_text = _new_convert_rtlil_text
+            rtlil.Emitter.indent = _new_indent
             rtlil.Module = self.ModuleClass
             rtlil._const = self.ModuleClass._const
-            rtlil.Design.__str__ = _to_str
+            rtlil.Design.__str__ = _new_to_str
+            _ir._add_name = _new_add_name
+            _ir._compute_ports = _new_compute_ports
+            _ir._compute_io_ports = _new_compute_io_ports
             return verilog.convert(elaboratable, name=name, ports=ports, platform=platform, **kwargs)
         finally:
-            verilog._convert_rtlil_text = orig__convert_rtlil_text
-            rtlil.Emitter.indent = orig__emitter_indent
-            rtlil.Module = orig__module
-            rtlil._const = orig__const
-            rtlil.Design.__str__ = orig__str__
+            verilog._convert_rtlil_text = _convert_rtlil_text
+            rtlil.Emitter.indent = Emitter.indent
+            rtlil.Module = rtlil_Module
+            rtlil._const = _const
+            rtlil.Design.__str__ = Design.__str__
+            _ir._add_name = _add_name
+            _ir._compute_ports = _compute_ports
+            _ir._compute_io_ports = _compute_io_ports
 
 def get_lang_map() -> dict[str, type[HDL]]:
     lang_map: dict[str, type[HDL]] = {}
