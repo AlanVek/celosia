@@ -3,11 +3,10 @@ import importlib
 import pkgutil
 from contextlib import contextmanager
 from celosia.hdl.module import Module
-from amaranth.hdl import _ast
 
 # Overrides
 #####################################################################################################
-from amaranth.back import verilog, rtlil
+from amaranth.back import verilog as _verilog, rtlil
 from amaranth.back.verilog import _convert_rtlil_text
 from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design
 from amaranth.hdl import _ir, _nir
@@ -85,7 +84,7 @@ class HDL(metaclass=HDLExtensions):
             yield
             emitter._indent = orig
 
-        verilog._convert_rtlil_text = _new_convert_rtlil_text
+        _verilog._convert_rtlil_text = _new_convert_rtlil_text
         rtlil.Emitter.indent = _new_indent
         rtlil.Module = self.ModuleClass
         rtlil._const = self.ModuleClass._const
@@ -95,7 +94,7 @@ class HDL(metaclass=HDLExtensions):
         _ir._compute_io_ports = _new_compute_io_ports
 
     def cleanup_overrides(self):
-        verilog._convert_rtlil_text = _convert_rtlil_text
+        _verilog._convert_rtlil_text = _convert_rtlil_text
         rtlil.Emitter.indent = Emitter.indent
         rtlil.Module = rtlil_Module
         rtlil._const = _const
@@ -107,7 +106,7 @@ class HDL(metaclass=HDLExtensions):
     def convert(self, elaboratable: Any, name='top', platform=None, ports=None, **kwargs):
         try:
             self.generate_overrides()
-            return verilog.convert(elaboratable, name=name, ports=ports, platform=platform, **kwargs)
+            return _verilog.convert(elaboratable, name=name, ports=ports, platform=platform, **kwargs)
         finally:
             self.cleanup_overrides()
 
