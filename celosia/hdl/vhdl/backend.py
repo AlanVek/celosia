@@ -2,6 +2,7 @@ from celosia.hdl.module import Module as BaseModule
 import celosia.hdl.wire as celosia_wire
 from typing import Any, Union
 from amaranth.back import rtlil
+from amaranth.hdl import _ast
 
 class VHDLModule(BaseModule):
     submodules_first = True
@@ -36,6 +37,7 @@ class VHDLModule(BaseModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._types: dict[str, tuple[str, str]] = {}
+        self._attributes: dict[str, str] = {}
 
         self._curr_line_manager = []
 
@@ -208,16 +210,44 @@ class VHDLModule(BaseModule):
                         self._line(f'{name} => {self._represent(value)}{sep}')
                 self._line(');')
 
+    def _parse_attribute(self, key: str, value: Any) -> tuple[str, str, bool]:
+        if isinstance(value, bool):
+            value = str(value).lower()
+            type = 'boolean'
+
+        elif isinstance(value, (int, _ast.Const)):
+            if isinstance(value, _ast.Const):
+                value = value.value
+
+            if abs(value) < 2**32:
+                type = 'integer'
+            else:
+                type = 'string'
+                value = f'"{value}"'
+
+        else:
+            type = 'string'
+            if isinstance(value, str):
+                value = value.replace('"', '""')
+            value = f'"{value}"'
+
+        prev_type = self._attributes.get(key, None)
+        if prev_type is None:
+            declare = True
+            self._attributes[key] = type
+        else:
+            declare = False
+            if prev_type != type:
+               raise RuntimeError(f"Unable to generate module '{self.name}': attribute '{key}' needs type '{type}' but has already been declared with type '{prev_type}'")
+
+        return type, value, declare
+
     def _emit_signal(self, signal: rtlil.Wire):
         if signal.port_kind is not None:
             return
         with self._line.indent():
             init = self._get_initial(signal)
             depth = len(init) if isinstance(init, list) else 0
-
-            # TODO: Attributes
-            # for key, attr in signal.attributes.items():
-            #     self._line(f'(* {key} = {self._const(attr)} *)')
 
             if depth:
                 for type_name, type_def in self._types[signal.name]:
@@ -231,7 +261,15 @@ class VHDLModule(BaseModule):
                 self._line(');')
             else:
                 reset = "(others => '0')" if init is None else init
-                self._line(f'signal {signal.name}: std_logic_vector({signal.width - 1} downto 0) := {reset};')
+                self._line(f'signal {signal.name}: std_logic_vector({max(0, signal.width - 1)} downto 0) := {reset};')
+
+            for key, value in signal.attributes.items():
+                if key == 'src':
+                    continue
+                type, value, declare = self._parse_attribute(key, value)
+                if declare:
+                    self._line(f'attribute {key} : {type};')
+                self._line(f'attribute {key} of {signal.name} : signal is {value};')
 
     def _emit_module_definition(self):
         for line in [
@@ -256,7 +294,7 @@ class VHDLModule(BaseModule):
                     init = self._get_initial(port)
                     reset = "(others => '0')" if init is None else init
                     sep = '' if i >= len(self._emitted_ports) - 1 else ';'
-                    self._line(f'{port.name}: {kind_map[port.port_kind]} std_logic_vector({port.width-1} downto 0) := {reset}{sep}')
+                    self._line(f'{port.name}: {kind_map[port.port_kind]} std_logic_vector({max(0, port.width-1)} downto 0) := {reset}{sep}')
             self._line(');')
         self._line(f'end {self.name};')
 

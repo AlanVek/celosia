@@ -163,6 +163,8 @@ class VerilogModule(BaseModule):
             depth = len(init) if isinstance(init, list) else 0
 
             for key, attr in signal.attributes.items():
+                if key == 'src':
+                    continue
                 self._line(f'(* {key} = {self._const(attr)} *)')
 
             if depth:
