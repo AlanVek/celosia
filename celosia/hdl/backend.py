@@ -380,9 +380,10 @@ class Module(rtlil.Module):
         pass
 
     def _emit_submodule(self, submodule: rtlil.Cell):
+        submodule.kind = self.sanitize(submodule.kind)
+
         # Shouldn't need to sanitize!
         # submodule.name = self.sanitize(submodule.name)
-        # submodule.kind = self.sanitize(submodule.kind)
 
         # for port in tuple(submodule.ports.keys()):
         #     submodule.ports[self.sanitize(port)] = submodule.ports.pop(port)
