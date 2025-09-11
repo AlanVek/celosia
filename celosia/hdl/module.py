@@ -29,7 +29,7 @@ class Module(rtlil.Module):
         self.name = self.sanitize(self.name)
         self._assigned_names: set[str] = set()
 
-        self._process_id = 0
+        self._operator: str = None
         self._rp_count = 0
 
     @classmethod
@@ -41,12 +41,28 @@ class Module(rtlil.Module):
         return name
 
     def _auto_name(self):
-        return self._filter_name(super()._auto_name())
+        op_names = {
+            '~': 'negated', '-': 'negative', '+': 'addition', '*': 'multiplication', '&': 'bitwise_and',
+            '^': 'bitwise_xor', '|': 'bitwise_or', 'u//': 'unsigned_div', 's//': 'signed_div', 'u%': 'unsigned_rem',
+            's%': 'signed_rem' , '<<': 'lshifted', 'u>>': 'urshifted', 's>>': 'srshifted',
+            'b': 'reduce_bool', 'r&': 'reduce_and', 'r^': 'reduce_xor', 'r|': 'reduce_or', '==': 'eq',
+            '!=': 'diff', 'u<': 'unsigned_lt', 's<': 'signed_lt', 'u>': 'unsigned_gt', 's>': 'signed_gt',
+            'u<=': 'unsigned_le', 's<=': 'signed_le', 'u>=': 'unsigned_ge', 's>=': 'signed_ge',
+            'm': 'mux',
+
+            'p': 'proc',    # Internal, for processes
+        }
+
+        name = op_names.get(self._operator, None)
+        if name is None:
+            name = super()._auto_name()
+
+        return self._filter_name(name)
 
     def _name(self, name):
         ret = super()._name(name)
         if ret.startswith('\\'):
-            ret = ret[1:]
+            ret = self._filter_name(ret[1:])
         return ret
 
     @classmethod
@@ -86,20 +102,21 @@ class Module(rtlil.Module):
 
     def wire(self, *args, **kwargs):
         wire = super().wire(*args, **kwargs)
-        wire.name = self._filter_name(wire.name)
         self._signals[wire.name] = wire
         if wire.port_kind is not None:
             self._emitted_ports.append(wire)
         return wire
 
     def process(self, *args, **kwargs):
+        original_operator = self._operator
+        self._operator = 'p'
         process = super().process(*args, **kwargs)
+        self._operator = original_operator
         self._emitted_processes.append((process, {}))
         return process
 
     def cell(self, *args, **kwargs):
         cell = super().cell(*args, **kwargs)
-        cell.name = self._filter_name(cell.name)
 
         for key, value in cell.ports.items():
             cell.ports[key] = self._convert_signals(value)
@@ -124,7 +141,6 @@ class Module(rtlil.Module):
 
     def memory(self, *args, **kwargs):
         memory = super().memory(*args, **kwargs)
-        memory.name = self._filter_name(memory.name)
         self._emitted_memories[memory.name] = self._signals[memory.name] = Memory(memory)
         return memory
 
@@ -140,6 +156,9 @@ class Module(rtlil.Module):
         for division in self._emitted_divisions:
             self._signed_division_fix(division)
 
+        for flip_flop in self._emitted_flip_flops:
+            self._emit_flip_flop(flip_flop)
+
         # After this point, no new signals, processes or connections are created
         # We have this callback so subclasses can gather all the information they may need before starting
         self._emit_pre_callback()
@@ -151,9 +170,6 @@ class Module(rtlil.Module):
         # After this point, all signals have been emitted
         # We have this callback so subclasses can gather all the information they may need before starting
         self._emit_post_callback()
-
-        for flip_flop in self._emitted_flip_flops:
-            self._emit_flip_flop(flip_flop)
 
         for process, kwargs in self._emitted_processes:
             self._emit_process(process, **kwargs)
@@ -214,22 +230,17 @@ class Module(rtlil.Module):
 
         return mem
 
-    def _new_process(self) -> str:
-        ret = f'process_{self._process_id}'
-        self._process_id += 1
-        return ret
-
     def _emit_process(self, process: rtlil.Process, comb = True, **kwargs):
         with self._line.indent():
-            p_id = self._emit_process_start(**kwargs)
+            self._emit_process_start(process.name, **kwargs)
 
             with self._line.indent():
                 self._emit_process_contents(process.contents, comb=comb)
 
-            self._emit_process_end(p_id, comb=comb)
+            self._emit_process_end(process.name, comb=comb)
 
-    def _emit_process_start(self, clock: str = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
-        return self._new_process()
+    def _emit_process_start(self, name: str, clock: str = None, polarity: bool = True, arst: str = None, arst_polarity = False):
+        pass
 
     def _emit_process_contents(self, contents: list[Union[rtlil.Assignment, rtlil.Switch]], comb=True):
         index = 0
@@ -416,6 +427,9 @@ class Module(rtlil.Module):
         processes, connections = memory.build(self.wire)
 
         for clk, process in processes:
+            if process.name is None:
+                process.name = self._auto_name()
+
             kwargs = {}
             if clk is not None:
                 kwargs.update({'comb': False, 'clock': clk})
@@ -433,7 +447,7 @@ class Module(rtlil.Module):
         data = self._convert_signals(flip_flop.ports['D'])
         out = self._convert_signals(flip_flop.ports['Q'])
 
-        process = rtlil.Process(name=None)
+        process = self.process()
 
         if arst is None:
             process.assign(out, data)
@@ -445,14 +459,13 @@ class Module(rtlil.Module):
             switch.case(['1' if arst_polarity else '0']).assign(out, arst_value)
             switch.default().assign(out, data)
 
-        self._emit_process(
-            process,
-            comb = False,
-            clock = flip_flop.ports['CLK'],
-            polarity = flip_flop.parameters['CLK_POLARITY'],
-            arst = arst,
-            arst_polarity = arst_polarity,
-        )
+        self._emitted_processes[-1] = (process, {
+            'comb':  False,
+            'clock':  flip_flop.ports['CLK'],
+            'polarity':  flip_flop.parameters['CLK_POLARITY'],
+            'arst':  arst,
+            'arst_polarity':  arst_polarity,
+        })
 
     def _emit_module_end(self):
         pass

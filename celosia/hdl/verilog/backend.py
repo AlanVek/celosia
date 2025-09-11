@@ -189,9 +189,7 @@ class VerilogModule(BaseModule):
     def _signal_is_reg(self, signal: rtlil.Wire):
         return signal.name in self._regs
 
-    def _emit_process_start(self, clock = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
-        ret = super()._emit_process_start(clock, polarity, arst, arst_polarity)
-
+    def _emit_process_start(self, name: str, clock = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
         if clock is None:
             trigger = '*'
         else:
@@ -202,9 +200,7 @@ class VerilogModule(BaseModule):
 
         self._line(f'always @ {trigger} begin')
 
-        return ret
-
-    def _emit_process_end(self, p_id: str, comb=True):
+    def _emit_process_end(self, name: str, comb=True):
         self._line('end')
 
     @classmethod
@@ -269,9 +265,6 @@ class VerilogModule(BaseModule):
         for process, _ in self._emitted_processes:
             for content in process.contents:
                 self._regs.update(self._collect_lhs(content))
-
-        for flip_flop in self._emitted_flip_flops:
-            self._regs.update(wire.name for wire in self._get_raw_signals(flip_flop.ports['Q']))
 
         for memory in self._emitted_memories.values():
             self._regs.add(memory.name)

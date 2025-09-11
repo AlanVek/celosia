@@ -203,7 +203,7 @@ class Memory(rtlil.Wire):
         return self.rps[-1]
 
     def build(self, new_signal_creator):
-        processes: list[tuple[rtlil.Process, str]] = []
+        processes: list[tuple[str, rtlil.Process]] = []
         connections: list[tuple[str, str]] = []
 
         write_ports = {}

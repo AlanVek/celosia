@@ -8,7 +8,7 @@ from celosia.hdl.module import Module
 #####################################################################################################
 from amaranth.back import verilog as _verilog, rtlil
 from amaranth.back.verilog import _convert_rtlil_text
-from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design
+from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design, ModuleEmitter
 from amaranth.hdl import _ir, _nir
 from amaranth.hdl._ir import _compute_ports, _compute_io_ports, _add_name
 #####################################################################################################
@@ -67,38 +67,61 @@ class HDL(metaclass=HDLExtensions):
         def _new_convert_rtlil_text(rtlil_text, *args, **kwargs):
             return rtlil_text
 
-        def _new_to_str(design: rtlil.Design, *args, **kwargs):
-            emitter = rtlil.Emitter()
+        class NewEmitter(rtlil.Emitter):
+            @contextmanager
+            def indent(emitter: rtlil.Emitter):
+                orig = emitter._indent
+                emitter._indent += ' ' * self.spaces
+                yield
+                emitter._indent = orig
 
-            modules = design.modules.values()
-            if self.ModuleClass.submodules_first:
-                modules = reversed(modules)
-            for module in modules:
-                module.emit(emitter)
-            return str(emitter)
+        class NewModuleEmitter(rtlil.ModuleEmitter):
+            def emit_cell_wires(self):
+                all_cells = self.module.cells
+                not_operators = []
 
-        @contextmanager
-        def _new_indent(emitter: rtlil.Emitter):
-            orig = emitter._indent
-            emitter._indent += ' ' * self.spaces
-            yield
-            emitter._indent = orig
+                for cell_idx in self.module.cells:
+                    cell = self.netlist.cells[cell_idx]
+                    if isinstance(cell, _nir.Operator):
+                        self.builder._operator = cell.operator
+                        self.module.cells = [cell_idx]
+                        super().emit_cell_wires()
+                    else:
+                        self.builder._operator = self.builder._inputs = None
+                        not_operators.append(cell_idx)
+
+                self.module.cells = not_operators
+                super().emit_cell_wires()
+                self.module.cells = all_cells
+
+        class NewDesign(rtlil.Design):
+            def __str__(design):
+                emitter = rtlil.Emitter()
+
+                modules = design.modules.values()
+                if self.ModuleClass.submodules_first:
+                    modules = reversed(modules)
+                for module in modules:
+                    module.emit(emitter)
+                return str(emitter)
 
         _verilog._convert_rtlil_text = _new_convert_rtlil_text
-        rtlil.Emitter.indent = _new_indent
+        rtlil.Emitter = NewEmitter
         rtlil.Module = self.ModuleClass
         rtlil._const = self.ModuleClass._const
-        rtlil.Design.__str__ = _new_to_str
+        rtlil.Design = NewDesign
+        rtlil.ModuleEmitter = NewModuleEmitter
         _ir._add_name = _new_add_name
         _ir._compute_ports = _new_compute_ports
         _ir._compute_io_ports = _new_compute_io_ports
 
     def cleanup_overrides(self):
         _verilog._convert_rtlil_text = _convert_rtlil_text
-        rtlil.Emitter.indent = Emitter.indent
+        rtlil.Emitter = Emitter
         rtlil.Module = rtlil_Module
         rtlil._const = _const
-        rtlil.Design.__str__ = Design.__str__
+        rtlil.Design = Design
+        rtlil.ModuleEmitter = ModuleEmitter
         _ir._add_name = _add_name
         _ir._compute_ports = _compute_ports
         _ir._compute_io_ports = _compute_io_ports

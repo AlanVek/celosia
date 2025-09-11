@@ -303,9 +303,7 @@ class VHDLModule(BaseModule):
     def _emit_post_callback(self):
         self._line('begin')
 
-    def _emit_process_start(self, clock = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
-        ret = super()._emit_process_start(clock, polarity, arst, arst_polarity)
-
+    def _emit_process_start(self, name: str, clock = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
         if clock is None:
             sensitivity = ['all']
         else:
@@ -315,7 +313,7 @@ class VHDLModule(BaseModule):
                 arst = self._represent(arst)
                 sensitivity.append(arst)
 
-        self._line(f'{ret}: process ({", ".join(sensitivity)})')
+        self._line(f'{name}: process ({", ".join(sensitivity)})')
         self._line('begin')
 
         if clock is not None:
@@ -328,9 +326,7 @@ class VHDLModule(BaseModule):
             self._curr_line_manager[-1].__enter__()
             self._line(f'if {trigger} then')
 
-        return ret
-
-    def _emit_process_end(self, p_id: str, comb=True):
+    def _emit_process_end(self, name: str, comb=True):
         if not comb:
             assert len(self._curr_line_manager)
             self._line('end if;')
