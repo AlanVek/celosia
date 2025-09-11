@@ -30,6 +30,7 @@ class Module(rtlil.Module):
         self._assigned_names: set[str] = set()
 
         self._operator: str = None
+        self._inputs: tuple[str, ...] = None
         self._rp_count = 0
 
     @classmethod
@@ -50,7 +51,8 @@ class Module(rtlil.Module):
             'u<=': 'unsigned_le', 's<=': 'signed_le', 'u>=': 'unsigned_ge', 's>=': 'signed_ge',
             'm': 'mux',
 
-            'p': 'proc',    # Internal, for processes
+            'p': 'proc',        # Internal, for processes
+            'i': 'internal',    # Internal, for intermediate signals
         }
 
         name = op_names.get(self._operator, None)

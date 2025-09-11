@@ -78,20 +78,29 @@ class HDL(metaclass=HDLExtensions):
         class NewModuleEmitter(rtlil.ModuleEmitter):
             def emit_cell_wires(self):
                 all_cells = self.module.cells
-                not_operators = []
+                regular: list[int] = []
+                special: list[tuple[int, str, tuple[str, ...]]] = []
 
                 for cell_idx in self.module.cells:
                     cell = self.netlist.cells[cell_idx]
                     if isinstance(cell, _nir.Operator):
-                        self.builder._operator = cell.operator
-                        self.module.cells = [cell_idx]
-                        super().emit_cell_wires()
+                        special.append((cell_idx, cell.operator, None))   # cell.inputs
+                    elif isinstance(cell, _nir.AssignmentList):
+                        special.append((cell_idx, 'i', None))
                     else:
-                        self.builder._operator = self.builder._inputs = None
-                        not_operators.append(cell_idx)
+                        regular.append(cell_idx)
 
-                self.module.cells = not_operators
+                self.builder._operator = self.builder._inputs = None
+                self.module.cells = regular
                 super().emit_cell_wires()
+
+                for cell_idx, operator, inputs in special:
+                    self.builder._operator = operator
+                    # if inputs is not None:
+                    #     self.builder._inputs = tuple(self.sigspec(i).split()[0] for i in inputs)
+                    self.module.cells = [cell_idx]
+                    super().emit_cell_wires()
+
                 self.module.cells = all_cells
 
         class NewDesign(rtlil.Design):
