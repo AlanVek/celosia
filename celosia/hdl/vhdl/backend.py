@@ -498,13 +498,12 @@ class VHDLModule(BaseModule):
                 operands.append(self._convert_signals(operator.ports[port]))
                 widths.append(operands[-1].width)
 
-            if operator.kind in BOOL_OPERATORS_BINARY:
-                target_width = max(operand.width for operand in operands)
+            operand_width = max(target_width, max(operand.width for operand in operands))
 
             for i, port in enumerate(('A', 'B')):
                 operands[i] = self._resize_and_sign(
                     value = operands[i],
-                    width = target_width,
+                    width = operand_width,
                     signed = operator.parameters[f'{port}_SIGNED'],
                     ignore_size = operator.kind == '$mul',
                     boolean = boolean and operator.kind not in BOOL_OPERATORS_BINARY,    # Bool operators already generate boolean
@@ -512,7 +511,10 @@ class VHDLModule(BaseModule):
 
             rhs = f' {BINARY_OPERATORS[operator.kind]} '.join(operands)
 
-            if operator.kind == '$mul' and sum(widths) != target_width:
+            if (
+                (operator.kind == '$mul' and sum(widths) != target_width) or
+                (operand_width > target_width and operator.kind not in BOOL_OPERATORS_BINARY)
+            ):
                 rhs = f'resize({rhs}, {target_width})'
 
         elif operator.kind in SHIFT_OPERATORS:
