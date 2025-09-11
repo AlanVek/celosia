@@ -109,7 +109,11 @@ class Concat(Wire):
                 curr_width += wire.width
             else:
                 curr_value, curr_width = emit_const()
-                if isinstance(wire, Concat):
+                if isinstance(wire, Concat) and wire.parts and isinstance(wire.parts[-1], Const):
+                    real_wires.extend(wire.parts[:-1])
+                    curr_value = wire.parts[-1].value
+                    curr_width = wire.parts[-1].width
+                elif isinstance(wire, Concat):
                     real_wires.extend(wire.parts)
                 else:
                     real_wires.append(wire)
