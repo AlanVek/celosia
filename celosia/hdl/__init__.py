@@ -104,6 +104,7 @@ class HDL(metaclass=HDLExtensions):
                     self.module.cells = [cell_idx]
                     super().emit_cell_wires()
 
+                self.builder._operator = self.builder._inputs = None
                 self.module.cells = all_cells
 
         class NewDesign(rtlil.Design):
