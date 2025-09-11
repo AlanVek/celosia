@@ -43,7 +43,7 @@ class Module(rtlil.Module):
 
     def _auto_name(self):
         op_names = {
-            '~': 'negated', '-': 'negative', '+': 'addition', '*': 'multiplication', '&': 'bitwise_and',
+            '~': 'negated', '-': 'subtraction', '+': 'addition', '*': 'multiplication', '&': 'bitwise_and',
             '^': 'bitwise_xor', '|': 'bitwise_or', 'u//': 'unsigned_div', 's//': 'signed_div', 'u%': 'unsigned_rem',
             's%': 'signed_rem' , '<<': 'lshifted', 'u>>': 'urshifted', 's>>': 'srshifted',
             'b': 'reduce_bool', 'r&': 'reduce_and', 'r^': 'reduce_xor', 'r|': 'reduce_or', '==': 'eq',
@@ -55,6 +55,12 @@ class Module(rtlil.Module):
             'i': 'internal',    # Internal, for intermediate signals
             's': 'rshifted',    # Internal, for parts
         }
+
+        if self._inputs is not None:
+            if len(self._inputs) == 1:
+                op_names.update({
+                    '-': 'negative',
+                })
 
         name = op_names.get(self._operator, None)
         if name is None:
