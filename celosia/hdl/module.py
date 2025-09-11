@@ -642,16 +642,22 @@ class Module(rtlil.Module):
         return self._slice_repr(idx.name, self._represent(idx.address))
 
     def _signed_division_fix(self, division: rtlil.Cell):
-        DIVISION_OPERATORS = {
-            "$divfloor",
-            "$modfloor",
-        }
+        # DIVISION_OPERATORS = {
+        #     "$divfloor",
+        #     "$modfloor",
+        # }
 
         if not (
-            (division.kind in DIVISION_OPERATORS) and
+            # (division.kind in DIVISION_OPERATORS) and
             (division.parameters['A_SIGNED'] or division.parameters['B_SIGNED'])
         ):
             self._emitted_operators.append(division)
+
+            # FIX: Initialize to non-zero for simulation
+            for wire in self._get_raw_signals(division.ports['B']):
+                if isinstance(wire, celosia_wire.Wire):
+                    if 'init' not in wire.wire.attributes:
+                        wire.wire.attributes['init'] = _ast.Const(1, wire.wire.width)
             return
 
         operands = []
@@ -660,10 +666,10 @@ class Module(rtlil.Module):
 
         max_size = max(operand.width for operand in operands) + 2
 
+        self._operator = 'i'
         dividend = celosia_wire.Wire(self.wire(max_size))
-        divisor = celosia_wire.Wire(self.wire(max_size))
-
-        # for operand in operands:
+        # FIX: Initialize to non-zero for simulation
+        divisor = celosia_wire.Wire(self.wire(max_size, attrs={'init': celosia_wire.Const(1, max_size)}))
 
         sign_bits0 = [operands[0][-1] for _ in range(max_size - operands[0].width)]
         sign_bits1 = [operands[1][-1] for _ in range(max_size - operands[1].width)]
@@ -671,6 +677,7 @@ class Module(rtlil.Module):
         self.connect(divisor, celosia_wire.Concat([operands[1], *sign_bits1]))
 
         # dividend[-1] == divisor[-1]
+        self._operator = '=='
         cmp_sign = self.wire(1)
         self.cell(kind = '$eq', name=None,
             ports = {
@@ -688,6 +695,7 @@ class Module(rtlil.Module):
         )
 
         # dividend == 0
+        self._operator = '=='
         cmp_zero = self.wire(1)
         self.cell(kind = '$eq', name=None,
             ports = {
@@ -705,6 +713,7 @@ class Module(rtlil.Module):
         )
 
         # divisor + 1
+        self._operator = '+'
         addition = self.wire(max_size)
         self.cell(kind='$add', name=None,
             ports = {
@@ -722,6 +731,7 @@ class Module(rtlil.Module):
         )
 
         # divisor - 1
+        self._operator = '-'
         substraction = self.wire(max_size)
         self.cell(kind='$sub', name=None,
             ports = {
@@ -739,6 +749,7 @@ class Module(rtlil.Module):
         )
 
         # divisor[-1] ? (divisor + 1) : (divisor - 1)
+        self._operator = 'm'
         substraction_mux = self.wire(max_size)
         self.cell(kind = '$mux', name = None,
             ports = {
@@ -753,6 +764,7 @@ class Module(rtlil.Module):
         )
 
         # dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1))
+        self._operator = '-'
         mux_false_operand = self.wire(max_size)
         self.cell(kind='$sub', name=None,
             ports = {
@@ -770,6 +782,7 @@ class Module(rtlil.Module):
         )
 
         # (dividend[-1] == divisor[-1]) | (dividend == 0)
+        self._operator = 'm'
         mux_sel = self.wire(1)
         self.cell(kind = '$or', name=None,
             ports = {
@@ -787,6 +800,7 @@ class Module(rtlil.Module):
         )
 
         # (dividend[-1] == divisor[-1]) | (dividend == 0) ? dividend : (dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1)))
+        self._operator = 'm'
         real_dividend = self.wire(max_size)
         self.cell(kind = '$mux', name = None,
             ports = {
@@ -814,6 +828,8 @@ class Module(rtlil.Module):
                 'Y_WIDTH': division.parameters['Y_WIDTH'],
             }
         ))
+
+        self._operator = None
 
     def _signed(self, value) -> str:
         return ''
