@@ -87,6 +87,8 @@ class HDL(metaclass=HDLExtensions):
                         special.append((cell_idx, cell.operator, None))   # cell.inputs
                     elif isinstance(cell, _nir.AssignmentList):
                         special.append((cell_idx, 'i', None))
+                    elif isinstance(cell, _nir.Part):
+                        special.append((cell_idx, 's', None))
                     else:
                         regular.append(cell_idx)
 

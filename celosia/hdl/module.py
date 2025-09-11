@@ -53,6 +53,7 @@ class Module(rtlil.Module):
 
             'p': 'proc',        # Internal, for processes
             'i': 'internal',    # Internal, for intermediate signals
+            's': 'rshifted',    # Internal, for parts
         }
 
         name = op_names.get(self._operator, None)
