@@ -7,7 +7,6 @@ from amaranth.hdl import _ast
 # TODO: Clean up -- Use resize for everything
 
 class VHDLModule(BaseModule):
-    submodules_first = True
     case_sensitive = False
 
     protected = [

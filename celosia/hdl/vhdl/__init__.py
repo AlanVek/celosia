@@ -6,7 +6,7 @@ from amaranth.hdl import _ast, _ir
 class VHDL(HDL):
     ModuleClass = VHDLModule
 
-    top_first = False
+    submodules_first = True
     extensions = ['vhd', 'vhdl']
     open_comment = '-- '
     close_comment = ''

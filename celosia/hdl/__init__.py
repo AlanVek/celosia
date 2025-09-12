@@ -25,7 +25,7 @@ class HDLExtensions(type):
 class HDL(metaclass=HDLExtensions):
     ModuleClass = Module
 
-    top_first = True
+    submodules_first = False
     open_comment = ''
     close_comment = ''
 
@@ -77,14 +77,12 @@ class HDL(metaclass=HDLExtensions):
 
         class NewDesign(rtlil.Design):
             def __str__(design):
-                emitter = rtlil.Emitter()
-
-                modules = design.modules.values()
-                if self.ModuleClass.submodules_first:
-                    modules = reversed(modules)
-                for module in modules:
-                    module.emit(emitter)
-                return str(emitter)
+                original = design.modules
+                if self.submodules_first:
+                    design.modules = {key: value for key, value in reversed(original.items())}
+                ret = super().__str__()
+                design.modules = original
+                return ret
 
         _verilog._convert_rtlil_text = _new_convert_rtlil_text
         rtlil.Emitter = NewEmitter

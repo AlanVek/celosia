@@ -6,7 +6,7 @@ from amaranth.hdl import _ast, _ir
 class Verilog(HDL):
     ModuleClass = VerilogModule
 
-    top_first = False
+    submodules_first = False
     extensions = ['v']
     open_comment = '/* '
     close_comment = ' */'

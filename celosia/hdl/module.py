@@ -9,7 +9,6 @@ from amaranth.hdl import _ast
 
 class Module(rtlil.Module):
 
-    submodules_first = False
     case_sensitive = True
     _DEFERRED_WIRE_MARKER = '$____celosia_internal_deferred$'
 
