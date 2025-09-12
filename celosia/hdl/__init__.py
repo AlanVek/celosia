@@ -8,7 +8,7 @@ from celosia.hdl.module import Module
 #####################################################################################################
 from amaranth.back import verilog as _verilog, rtlil
 from amaranth.back.verilog import _convert_rtlil_text
-from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design, ModuleEmitter
+from amaranth.back.rtlil import Module as rtlil_Module, Emitter, _const, Design
 from amaranth.hdl import _ir, _nir
 from amaranth.hdl._ir import _compute_ports, _compute_io_ports, _add_name
 #####################################################################################################
@@ -75,38 +75,6 @@ class HDL(metaclass=HDLExtensions):
                 yield
                 emitter._indent = orig
 
-        class NewModuleEmitter(rtlil.ModuleEmitter):
-            def emit_cell_wires(self):
-                all_cells = self.module.cells
-                regular: list[int] = []
-                special: list[tuple[int, str, tuple[str, ...]]] = []
-
-                for cell_idx in self.module.cells:
-                    cell = self.netlist.cells[cell_idx]
-                    if isinstance(cell, _nir.Operator):
-                        special.append((cell_idx, cell.operator, cell.inputs))
-                    elif isinstance(cell, _nir.AssignmentList):
-                        special.append((cell_idx, 'i', None))
-                    elif isinstance(cell, _nir.Part):
-                        special.append((cell_idx, 's', None))
-                    else:
-                        regular.append(cell_idx)
-
-                self.builder._operator = self.builder._inputs = None
-                self.module.cells = regular
-                super().emit_cell_wires()
-
-                for cell_idx, operator, inputs in special:
-                    self.builder._operator = operator
-                    if inputs is not None:
-                        # self.builder._inputs = tuple(self.sigspec(i).split()[0] for i in inputs)
-                        self.builder._inputs = inputs
-                    self.module.cells = [cell_idx]
-                    super().emit_cell_wires()
-
-                self.builder._operator = self.builder._inputs = None
-                self.module.cells = all_cells
-
         class NewDesign(rtlil.Design):
             def __str__(design):
                 emitter = rtlil.Emitter()
@@ -123,7 +91,6 @@ class HDL(metaclass=HDLExtensions):
         rtlil.Module = self.ModuleClass
         rtlil._const = self.ModuleClass._const
         rtlil.Design = NewDesign
-        rtlil.ModuleEmitter = NewModuleEmitter
         _ir._add_name = _new_add_name
         _ir._compute_ports = _new_compute_ports
         _ir._compute_io_ports = _new_compute_io_ports
@@ -134,7 +101,6 @@ class HDL(metaclass=HDLExtensions):
         rtlil.Module = rtlil_Module
         rtlil._const = _const
         rtlil.Design = Design
-        rtlil.ModuleEmitter = ModuleEmitter
         _ir._add_name = _add_name
         _ir._compute_ports = _compute_ports
         _ir._compute_io_ports = _compute_io_ports

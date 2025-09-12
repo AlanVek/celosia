@@ -183,7 +183,7 @@ class Memory(rtlil.Wire):
         self.wps: list[WritePort] = []
 
     def set_cell(self, cell: rtlil.Cell):
-        init: celosia_wire.Const = cell.ports.get('DATA', None)
+        init: celosia_wire.Const = celosia_wire.Const.from_string(cell.ports.get('DATA', None))
         if init is not None:
             mem_size = self.memory.depth * self.width
 

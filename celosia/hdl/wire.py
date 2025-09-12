@@ -1,6 +1,4 @@
 from amaranth.back import rtlil
-from amaranth.hdl import _ast
-from typing import Union
 
 def _get_slice_params(slice: slice, width: int):
     start = slice.start
@@ -20,12 +18,24 @@ def _get_slice_params(slice: slice, width: int):
 
     return start, stop
 
-class Wire:
+class Component:
+    pass
+
+class Wire(Component):
     def __init__(self, wire: rtlil.Wire):
         self.wire = wire
 
-        self.name = wire.name
-        self.width = wire.width
+    @property
+    def name(self) -> str:
+        return self.wire.name
+
+    @name.setter
+    def name(self, value: str):
+        self.wire.name = value
+
+    @property
+    def width(self) -> int:
+        return self.wire.width
 
     def __getitem__(self, index):
         if isinstance(index, int):
@@ -47,18 +57,24 @@ class Wire:
             return self.name == value.name
         return False
 
-class Cell(Wire):
+class Cell(Component):
     def __init__(self, cell: rtlil.Cell):
         self.cell = cell
-        self.width = cell.parameters.get('Y_WIDTH', None) or cell.parameters.get('WIDTH', None)
 
-class Slice(Wire):
-    def __init__(self, wire: Wire, start_idx=None, stop_idx=None):
+    @property
+    def width(self) -> int:
+        return self.cell.parameters.get('Y_WIDTH', None) or self.cell.parameters.get('WIDTH', None)
+
+class Slice(Component):
+    def __init__(self, wire: Component, start_idx: int = None, stop_idx: int = None):
         self.wire = wire
         start, stop = _get_slice_params(slice(start_idx, stop_idx), wire.width)
         self.start_idx = start
         self.stop_idx = stop
-        self.width = stop - start
+
+    @property
+    def width(self) -> int:
+        return self.stop_idx - self.start_idx
 
     def __getitem__(self, index):
         if isinstance(index, int):
@@ -85,13 +101,16 @@ class Slice(Wire):
             return (value == self)
         return False
 
-class Concat(Wire):
-    def __init__(self, wires: list[Wire]):
+class Concat(Component):
+    def __init__(self, wires: list[Component]):
         self.parts = self._cleanup(wires)
-        self.width = sum(wire.width for wire in wires)
+
+    @property
+    def width(self) -> int:
+        return sum(part.width for part in self.parts)
 
     @classmethod
-    def _cleanup(cls, wires):
+    def _cleanup(cls, wires) -> list[Component]:
         real_wires = []
         curr_value = curr_width = 0
 
@@ -167,10 +186,18 @@ class Concat(Wire):
             return (value == self)
         return False
 
-class Const(Wire):
+class Const(Component):
     def __init__(self, value: int, width: int):
         self.value = value
-        self.width = width
+        self._width = width
+
+    @property
+    def width(self):
+        return self._width
+
+    @width.setter
+    def width(self, width: int):
+        self._width = width
 
     def __getitem__(self, index):
         if isinstance(index, int):
@@ -195,6 +222,9 @@ class Const(Wire):
         if string is None:
             return None
 
+        if isinstance(string, Const):
+            return string
+
         width_idx = string.find("'")
         if width_idx < 0:
             return None
@@ -211,14 +241,18 @@ class Const(Wire):
 
         return cls(int(string, 2), width)
 
-class MemoryIndex(Wire):
-    def __init__(self, memory: rtlil.Memory, address: Wire):
+class MemoryIndex(Component):
+    def __init__(self, memory: rtlil.Memory, address: Component):
         self.memory = memory
-
-        self.name = memory.name
-        self.width = memory.width
-
         self.address = address
+
+    @property
+    def name(self) -> str:
+        return self.memory.name
+
+    @property
+    def width(self) -> int:
+        return self.memory.width
 
     def __eq__(self, value):
         if isinstance(value, MemoryIndex):

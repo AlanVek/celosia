@@ -11,6 +11,7 @@ class Module(rtlil.Module):
 
     submodules_first = False
     case_sensitive = True
+    _DEFERRED_WIRE_MARKER = '$____celosia_internal_deferred$'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -23,15 +24,16 @@ class Module(rtlil.Module):
         self._emitted_submodules: list[rtlil.Cell] = []
         self._emitted_memories: dict[str, Memory] = {}
         self._emitted_operators: list[rtlil.Cell] = []
-        self._emitted_flip_flops: list[rtlil.Cell] = []
-        self._emitted_divisions: list[rtlil.Cell] = []
+
+        self._process_wires: set[str] = set()
 
         self.name = self.sanitize(self.name)
         self._assigned_names: set[str] = set()
+        self._renamed: set[str] = set()
 
-        self._operator: str = None
-        self._inputs: tuple[str, ...] = None
         self._rp_count = 0
+
+        self._SANITIZED_DEFERRED_MARKED = self.sanitize(self._DEFERRED_WIRE_MARKER)
 
     @classmethod
     def _const(cls, value: Any):
@@ -42,31 +44,7 @@ class Module(rtlil.Module):
         return name
 
     def _auto_name(self):
-        op_names = {
-            '~': 'negated', '-': 'subtraction', '+': 'addition', '*': 'multiplication', '&': 'bitwise_and',
-            '^': 'bitwise_xor', '|': 'bitwise_or', 'u//': 'unsigned_div', 's//': 'signed_div', 'u%': 'unsigned_rem',
-            's%': 'signed_rem' , '<<': 'lshifted', 'u>>': 'urshifted', 's>>': 'srshifted',
-            'b': 'reduce_bool', 'r&': 'reduce_and', 'r^': 'reduce_xor', 'r|': 'reduce_or', '==': 'eq',
-            '!=': 'diff', 'u<': 'unsigned_lt', 's<': 'signed_lt', 'u>': 'unsigned_gt', 's>': 'signed_gt',
-            'u<=': 'unsigned_le', 's<=': 'signed_le', 'u>=': 'unsigned_ge', 's>=': 'signed_ge',
-            'm': 'mux',
-
-            'p': 'proc',        # Internal, for processes
-            'i': 'internal',    # Internal, for intermediate signals
-            's': 'rshifted',    # Internal, for parts
-        }
-
-        if self._inputs is not None:
-            if len(self._inputs) == 1:
-                op_names.update({
-                    '-': 'negative',
-                })
-
-        name = op_names.get(self._operator, None)
-        if name is None:
-            name = super()._auto_name()
-
-        return self._filter_name(name)
+        return self._filter_name(super()._auto_name())
 
     def _name(self, name):
         ret = super()._name(name)
@@ -109,31 +87,33 @@ class Module(rtlil.Module):
         self._assigned_names.add(self._change_case(name))
         return name
 
-    def wire(self, *args, **kwargs):
-        wire = super().wire(*args, **kwargs)
+    def _anonymous_name(self, name: str) -> str:
+        if name is None:
+            # We'll rename this later
+            name = self._DEFERRED_WIRE_MARKER
+        return name
+
+    def wire(self, *args, name=None, **kwargs):
+        wire = super().wire(*args, name=self._anonymous_name(name), **kwargs)
         self._signals[wire.name] = wire
         if wire.port_kind is not None:
             self._emitted_ports.append(wire)
         return wire
 
-    def process(self, *args, **kwargs):
-        original_operator = self._operator
-        self._operator = 'p'
-        process = super().process(*args, **kwargs)
-        self._operator = original_operator
+    def process(self, *args, name=None, **kwargs):
+        process = super().process(*args, name=self._anonymous_name(name), **kwargs)
         self._emitted_processes.append((process, {}))
         return process
 
     def cell(self, *args, **kwargs):
         cell = super().cell(*args, **kwargs)
 
-        for key, value in cell.ports.items():
-            cell.ports[key] = self._convert_signals(value)
+        rename_output = False
 
         if self._cell_is_submodule(cell):
             self._emitted_submodules.append(cell)
         elif self._cell_is_ff(cell):
-            self._emitted_flip_flops.append(cell)
+            self._emit_flip_flop(cell)
         elif self._cell_is_memory(cell):
             self._get_memory_from_port(cell).set_cell(cell)
         elif self._cell_is_memory_wp(cell):
@@ -141,17 +121,153 @@ class Module(rtlil.Module):
         elif self._cell_is_memory_rp(cell):
             if self._get_memory_from_port(cell).add_rp(cell, self._rp_count).clk_enable:
                 self._rp_count += 1
-        elif self._cell_is_division(cell):
-            self._emitted_divisions.append(cell)
-        # elif self._cell_is_yosys(cell):
         else:
+            rename_output = True
+            if self._cell_is_division(cell):
+                cell = self._signed_division_fix(cell)
             self._emitted_operators.append(cell)
+
+        self._convert_ports(cell, rename_output=rename_output)
         return cell
 
     def memory(self, *args, **kwargs):
         memory = super().memory(*args, **kwargs)
         self._emitted_memories[memory.name] = self._signals[memory.name] = Memory(memory)
         return memory
+
+    def _convert_ports(self, cell: rtlil.Cell, rename_output=False):
+        if rename_output:
+            output = self._convert_signals(cell.ports.get('Y', None))
+            self._rename_anonymous(output, cell=cell)
+
+        for key, value in cell.ports.items():
+            converted = self._convert_signals(value)
+            for signal in self._get_raw_signals(converted):
+                self._rename_anonymous(signal, kind='i')
+            cell.ports[key] = converted
+
+    def _rename_anonymous(self, wire: Union[celosia_wire.Component, Any], **kwargs):
+        if not hasattr(wire, 'name'):
+            return
+
+        old_name = wire.name
+        if old_name is None or (isinstance(old_name, str) and old_name.startswith(self._SANITIZED_DEFERRED_MARKED)):
+            new_name = self._get_name_for_cell_output(**kwargs)
+            wire.name = new_name
+
+            if isinstance(wire, celosia_wire.Wire):
+                # self._signals.pop(wire.name, None)
+                self._renamed.add(old_name)#] = new_name
+                self._signals[new_name] = wire.wire
+
+    # TODO: Reactive when cell names are improved
+    # def _get_name_for_cell_input(self, port: celosia_wire.Component) -> str:
+    #     ret = None
+    #     if isinstance(port, celosia_wire.Const):
+    #         ret = str(port.value)
+    #     elif isinstance(port, celosia_wire.Slice):
+    #         internal = self._get_name_for_cell_input(port.wire)
+    #         if internal is not None:
+    #             ret = f'{internal}_sliced'
+    #     elif isinstance(port, celosia_wire.Concat):
+    #         if len(port.parts) == 1:
+    #             ret = self._get_name_for_cell_input(port.parts[0])
+    #         else:
+    #             ret = 'concat'
+    #     elif isinstance(port, celosia_wire.Cell):
+    #         ret = 'cell'    # TODO: Improve?
+    #     elif isinstance(port, (celosia_wire.Wire, celosia_wire.MemoryIndex)):
+    #         ret = port.name
+
+    #     return ret
+
+    def _get_name_for_cell_output(self, cell: Union[rtlil.Cell, Any] = None, kind: str = None, prefix: Any = None) -> str:
+        op_names = {
+            '$neg': 'negative', '$sub': 'subtraction', '$not': 'inverted', '$add': 'addition', '$mul': 'multiplication',
+            '$and': 'bitwise_and', '$xor': 'bitwise_xor', '$or': 'bitwise_or', '$divfloor': 'division', '$modfloor': 'remanent',
+            '$shl': 'lshift', '$shr': 'rshift', '$shift': 'rshift', '$sshr': 'rshift',
+            '$reduce_bool': 'reduce_bool', '$reduce_and': 'reduce_and', '$reduce_xor': 'reduce_xor', '$reduce_or': 'reduce_or',
+            '$eq': 'equals', '$ne': 'notequals', '$lt': 'less_than', '$gt': 'greater_than', '$le': 'less_or_equals',
+            '$ge': 'greater_or_equals', '$mux': 'mux',
+
+            'p': 'proc',        # Internal, for processes
+            'i': 'internal',    # Internal, for intermediate signals
+            'f': '_next',       # Internal, for flip-flops
+        }
+
+        if kind is None:
+            kind = getattr(cell, 'kind', None)
+
+        final_name = op_name = None
+
+        if kind is not None:
+            op_name = op_names.get(kind, None)
+
+        if op_name is not None:
+            final_name = op_name
+
+        if hasattr(prefix, 'name'):
+            prefix = prefix.name
+
+        if isinstance(prefix, str):
+            final_name = f'{prefix}{final_name}'
+
+        return self._name(final_name)
+
+        # TODO: Improved naming for operations! It works, but names get weird quickly
+        # op_names = {
+        #     '$neg': 'negative', '$sub': 'minus', '$not': 'inv', '$add': 'plus', '$mul': 'times', '$and': 'and',
+        #     '$xor': 'xor', '$or': 'or', '$divfloor': 'div', '$modfloor': 'rem',
+        #     '$shl': 'lshifted', '$shr': 'rshifted', '$shift': 'rshifted', '$sshr': 'rshifted',
+        #     '$reduce_bool': 'reduce_bool', '$reduce_and': 'reduce_and', '$reduce_xor': 'reduce_xor', '$reduce_or': 'reduce_or',
+        #     '$eq': 'equals', '$ne': 'notequals', '$lt': 'less_than', '$gt': 'greater_than', '$le': 'less_or_equals',
+        #     '$ge': 'greater_or_equals', '$mux': 'mux',
+        # }
+
+        # names = []
+
+        # if cell.kind in op_names:
+        #     converted: list[celosia_wire.Component] = []
+        #     if cell.kind == '$mux':
+        #         converted.append(self._convert_signals(cell.ports['S']))
+
+        #     converted = [self._convert_signals(cell.ports['A'])]
+        #     port_b = cell.ports.get('B', None)
+        #     if port_b is not None:
+        #         converted.append(self._convert_signals(cell.ports['B']))
+
+        #     names.extend(
+        #         self._get_name_for_cell_input(port) for port in converted
+        #     )
+
+        # if names and all(names):
+        #     ret = f'{names[0]}_{op_names[cell.kind]}'
+        #     for name in names[1:]:
+        #         ret += f'_{name}'
+        #     if ret[-1].isnumeric():
+        #         ret += '_'
+        #     ret = self._name(ret)
+        # else:
+        #     ret = self._auto_name()
+
+        # return ret
+
+    def _collect_lhs(self, assignment: Any) -> set[str]:
+        ret = set()
+
+        # TODO: We can probably break early if LHS is never a concatenation
+        if isinstance(assignment, rtlil.Assignment):
+            ret.update(wire.name for wire in self._get_raw_signals(assignment.lhs))
+
+        elif isinstance(assignment, rtlil.Switch):
+            for case in assignment.cases:
+                ret.update(self._collect_lhs(case))
+
+        elif isinstance(assignment, (rtlil.Case, rtlil.Process)):
+            for content in assignment.contents:
+                ret.update(self._collect_lhs(content))
+
+        return ret
 
     def emit(self, line: rtlil.Emitter):
         self._line = line
@@ -161,20 +277,21 @@ class Module(rtlil.Module):
         for memory in self._emitted_memories.values():
             self._emit_memory(memory)
 
-        # Divisions may also create new signals, processes and connections
-        for division in self._emitted_divisions:
-            self._signed_division_fix(division)
-
-        for flip_flop in self._emitted_flip_flops:
-            self._emit_flip_flop(flip_flop)
+        for process, _ in self._emitted_processes:
+            self._rename_anonymous(process, kind='p')
+            for name in self._collect_lhs(process):
+                wire = self._signals[name]
+                self._rename_anonymous(celosia_wire.Wire(wire), kind='i')
+                self._process_wires.add(wire.name)
 
         # After this point, no new signals, processes or connections are created
         # We have this callback so subclasses can gather all the information they may need before starting
         self._emit_pre_callback()
 
         self._emit_module_definition()
-        for signal in self._signals.values():
-            self._emit_signal(signal)
+        for name, signal in self._signals.items():
+            if name not in self._renamed:
+                self._emit_signal(signal)
 
         # After this point, all signals have been emitted
         # We have this callback so subclasses can gather all the information they may need before starting
@@ -436,9 +553,6 @@ class Module(rtlil.Module):
         processes, connections = memory.build(self.wire)
 
         for clk, process in processes:
-            if process.name is None:
-                process.name = self._auto_name()
-
             kwargs = {}
             if clk is not None:
                 kwargs.update({'comb': False, 'clock': clk})
@@ -455,6 +569,8 @@ class Module(rtlil.Module):
         arst = self._convert_signals(flip_flop.ports.get('ARST', None))
         data = self._convert_signals(flip_flop.ports['D'])
         out = self._convert_signals(flip_flop.ports['Q'])
+
+        self._rename_anonymous(data, kind='f', prefix=out)
 
         process = self.process()
 
@@ -499,7 +615,7 @@ class Module(rtlil.Module):
     def _const_repr(width, value, init=False):
         return ''
 
-    def _represent(self, signal: celosia_wire.Wire, boolean = False) -> str:
+    def _represent(self, signal: celosia_wire.Component, boolean = False) -> str:
         if signal is None:
             return signal
 
@@ -548,14 +664,14 @@ class Module(rtlil.Module):
 
         raise ValueError(f"Unknown type to represent: {type(signal)}")
 
-    def _to_boolean(self, signal: celosia_wire.Wire):
+    def _to_boolean(self, signal: celosia_wire.Component):
         return self._represent(signal, boolean=False)
 
-    def _convert_signals(self, signal: Any) -> Union[rtlil.Wire, rtlil.Cell]:
+    def _convert_signals(self, signal: Any) -> celosia_wire.Component:
         if signal is None:
             return signal
 
-        if isinstance(signal, celosia_wire.Wire):
+        if isinstance(signal, celosia_wire.Component):
             return signal
 
         # Wire
@@ -576,7 +692,7 @@ class Module(rtlil.Module):
         if signal.startswith('{') and signal.endswith('}'):
             signal = signal[1:-1]
 
-        real_parts: list[celosia_wire.Wire] = []
+        real_parts: list[celosia_wire.Component] = []
 
         for part in signal.split():
             const = celosia_wire.Const.from_string(part)
@@ -623,7 +739,7 @@ class Module(rtlil.Module):
                 ret.extend(self._get_raw_signals(part))
         elif isinstance(converted, celosia_wire.Cell):
             pass    # TODO: What do we do here?
-        elif isinstance(converted, celosia_wire.Wire):
+        elif isinstance(converted, (celosia_wire.Wire, celosia_wire.MemoryIndex)):
             ret.append(converted)
         else:
             raise RuntimeError(f"Unknown signal type: {type(signal)}")
@@ -642,23 +758,16 @@ class Module(rtlil.Module):
         return self._slice_repr(idx.name, self._represent(idx.address))
 
     def _signed_division_fix(self, division: rtlil.Cell):
-        # DIVISION_OPERATORS = {
-        #     "$divfloor",
-        #     "$modfloor",
-        # }
-
         if not (
-            # (division.kind in DIVISION_OPERATORS) and
             (division.parameters['A_SIGNED'] or division.parameters['B_SIGNED'])
         ):
-            self._emitted_operators.append(division)
-
             # FIX: Initialize to non-zero for simulation
             for wire in self._get_raw_signals(division.ports['B']):
                 if isinstance(wire, celosia_wire.Wire):
                     if 'init' not in wire.wire.attributes:
                         wire.wire.attributes['init'] = _ast.Const(1, wire.wire.width)
-            return
+
+            return division
 
         operands = []
         for port in ('A', 'B'):
@@ -666,7 +775,6 @@ class Module(rtlil.Module):
 
         max_size = max(operand.width for operand in operands) + 2
 
-        self._operator = 'i'
         dividend = celosia_wire.Wire(self.wire(max_size))
         # FIX: Initialize to non-zero for simulation
         divisor = celosia_wire.Wire(self.wire(max_size, attrs={'init': celosia_wire.Const(1, max_size)}))
@@ -677,7 +785,6 @@ class Module(rtlil.Module):
         self.connect(divisor, celosia_wire.Concat([operands[1], *sign_bits1]))
 
         # dividend[-1] == divisor[-1]
-        self._operator = '=='
         cmp_sign = self.wire(1)
         self.cell(kind = '$eq', name=None,
             ports = {
@@ -695,7 +802,6 @@ class Module(rtlil.Module):
         )
 
         # dividend == 0
-        self._operator = '=='
         cmp_zero = self.wire(1)
         self.cell(kind = '$eq', name=None,
             ports = {
@@ -713,7 +819,6 @@ class Module(rtlil.Module):
         )
 
         # divisor + 1
-        self._operator = '+'
         addition = self.wire(max_size)
         self.cell(kind='$add', name=None,
             ports = {
@@ -731,7 +836,6 @@ class Module(rtlil.Module):
         )
 
         # divisor - 1
-        self._operator = '-'
         substraction = self.wire(max_size)
         self.cell(kind='$sub', name=None,
             ports = {
@@ -749,7 +853,6 @@ class Module(rtlil.Module):
         )
 
         # divisor[-1] ? (divisor + 1) : (divisor - 1)
-        self._operator = 'm'
         substraction_mux = self.wire(max_size)
         self.cell(kind = '$mux', name = None,
             ports = {
@@ -764,7 +867,6 @@ class Module(rtlil.Module):
         )
 
         # dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1))
-        self._operator = '-'
         mux_false_operand = self.wire(max_size)
         self.cell(kind='$sub', name=None,
             ports = {
@@ -782,7 +884,6 @@ class Module(rtlil.Module):
         )
 
         # (dividend[-1] == divisor[-1]) | (dividend == 0)
-        self._operator = 'm'
         mux_sel = self.wire(1)
         self.cell(kind = '$or', name=None,
             ports = {
@@ -800,7 +901,6 @@ class Module(rtlil.Module):
         )
 
         # (dividend[-1] == divisor[-1]) | (dividend == 0) ? dividend : (dividend - (divisor[-1] ? (divisor + 1) : (divisor - 1)))
-        self._operator = 'm'
         real_dividend = self.wire(max_size)
         self.cell(kind = '$mux', name = None,
             ports = {
@@ -814,7 +914,7 @@ class Module(rtlil.Module):
             },
         )
 
-        self._emitted_operators.append(rtlil.Cell(kind = division.kind, name = None,
+        return rtlil.Cell(kind = division.kind, name = None,
             ports = {
                 'A': celosia_wire.Wire(real_dividend),
                 'B': divisor,
@@ -827,9 +927,7 @@ class Module(rtlil.Module):
                 'B_SIGNED': True,
                 'Y_WIDTH': division.parameters['Y_WIDTH'],
             }
-        ))
-
-        self._operator = None
+        )
 
     def _signed(self, value) -> str:
         return ''

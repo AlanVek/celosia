@@ -66,6 +66,8 @@ class VHDLModule(BaseModule):
             '{': '_',
             '}': '_',
             '-': '_',
+            "'": "_",
+            " ": "_",
         }
 
         for old, new in replace_map.items():
@@ -375,7 +377,7 @@ class VHDLModule(BaseModule):
     def _emit_if_end(self):
         self._line('end if;')
 
-    def _resize_and_sign(self, value: celosia_wire.Wire, width: int, signed: bool = None, ignore_size=False, boolean=False) -> str:
+    def _resize_and_sign(self, value: celosia_wire.Component, width: int, signed: bool = None, ignore_size=False, boolean=False) -> str:
         need_resize = value.width != width
 
         if isinstance(value, celosia_wire.Const) and need_resize and not ignore_size:
@@ -396,7 +398,7 @@ class VHDLModule(BaseModule):
 
         return value
 
-    def _signed(self, value: celosia_wire.Wire, signed: bool = None, boolean = False) -> str:
+    def _signed(self, value: celosia_wire.Component, signed: bool = None, boolean = False) -> str:
         prefix = ''
         if not signed:
             prefix = 'un'
@@ -416,7 +418,7 @@ class VHDLModule(BaseModule):
                 value = f'{prefix}signed({value})'
         return value
 
-    def _to_boolean(self, signal: celosia_wire.Wire) -> str:
+    def _to_boolean(self, signal: celosia_wire.Component) -> str:
         if isinstance(signal, celosia_wire.Slice):
             boolean = isinstance(signal.wire, celosia_wire.Cell)
             wire_rep = self._represent(signal.wire, boolean=boolean)

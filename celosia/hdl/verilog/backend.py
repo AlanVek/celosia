@@ -37,8 +37,6 @@ class VerilogModule(BaseModule):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self._regs: set[str] = set()
-
     @classmethod
     def _const(cls, value: Any):
         if isinstance(value, str):
@@ -64,6 +62,8 @@ class VerilogModule(BaseModule):
             '{': '_',
             '}': '_',
             '-': '_',
+            "'": "_",
+            " ": "_",
         }
 
         for old, new in replace_map.items():
@@ -76,7 +76,7 @@ class VerilogModule(BaseModule):
             name = cls.sanitize('unnamed')
 
         if name[0].isnumeric():
-            name = 'esc_' + name
+            name = '_' + name
 
         return name
 
@@ -176,9 +176,6 @@ class VerilogModule(BaseModule):
                 reset = '' if init is None else f' = {init}'
                 self._line(f'{dir}{type} {width}{signal.name}{reset};')
 
-    def _emit_pre_callback(self):
-        self._collect_process_signals()
-
     def _emit_module_definition(self):
         self._line(f"module {self.name} (")
         with self._line.indent():
@@ -187,7 +184,7 @@ class VerilogModule(BaseModule):
         self._line(');')
 
     def _signal_is_reg(self, signal: rtlil.Wire):
-        return signal.name in self._regs
+        return signal.name in self._process_wires or signal.name in self._emitted_memories
 
     def _emit_process_start(self, name: str, clock = None, polarity: bool = True, arst: str = None, arst_polarity = False) -> str:
         if clock is None:
@@ -243,31 +240,6 @@ class VerilogModule(BaseModule):
 
     def _emit_if_end(self):
         self._line('end')
-
-    def _collect_lhs(self, assignment: Union[rtlil.Assignment, rtlil.Switch, rtlil.Case]) -> set[str]:
-        ret = set()
-
-        # TODO: We can probably break early if LHS is never a concatenation
-        if isinstance(assignment, rtlil.Assignment):
-            ret.update(wire.name for wire in self._get_raw_signals(assignment.lhs))
-
-        elif isinstance(assignment, rtlil.Switch):
-            for case in assignment.cases:
-                ret.update(self._collect_lhs(case))
-
-        elif isinstance(assignment, rtlil.Case):
-            for content in assignment.contents:
-                ret.update(self._collect_lhs(content))
-
-        return ret
-
-    def _collect_process_signals(self):
-        for process, _ in self._emitted_processes:
-            for content in process.contents:
-                self._regs.update(self._collect_lhs(content))
-
-        for memory in self._emitted_memories.values():
-            self._regs.add(memory.name)
 
     def _signed(self, value) -> str:
         return f'$signed({value})'
