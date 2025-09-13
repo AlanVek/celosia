@@ -724,26 +724,28 @@ class Module(rtlil.Module):
         else:
             return celosia_wire.Concat(real_parts[::-1])
 
-    def _get_raw_signals(self, signal: Any) -> list[Union[rtlil.Wire, rtlil.Cell]]:
+    def _get_raw_signal_names(self, signal: Any, running_dict: dict[str, celosia_wire.Wire] = None):
         converted = self._convert_signals(signal)
 
-        ret = []
+        if running_dict is None:
+            running_dict: dict[str, celosia_wire.Wire] = {}
 
-        if isinstance(converted, celosia_wire.Const):
+        if isinstance(converted, (celosia_wire.Const, celosia_wire.Cell)):
             pass
         elif isinstance(converted, celosia_wire.Slice):
-            ret.append(converted.wire)
+            running_dict.update(self._get_raw_signal_names(converted.wire, running_dict=running_dict))
         elif isinstance(converted, celosia_wire.Concat):
             for part in converted.parts:
-                ret.extend(self._get_raw_signals(part))
-        elif isinstance(converted, celosia_wire.Cell):
-            pass    # TODO: What do we do here?
+                running_dict.update(self._get_raw_signal_names(part, running_dict=running_dict))
         elif isinstance(converted, (celosia_wire.Wire, celosia_wire.MemoryIndex)):
-            ret.append(converted)
+            running_dict[converted.name] = converted
         else:
             raise RuntimeError(f"Unknown signal type: {type(signal)}")
 
-        return ret
+        return running_dict
+
+    def _get_raw_signals(self, signal: Any) -> tuple[celosia_wire.Wire, ...]:
+        return tuple(self._get_raw_signal_names(signal).values())
 
     @classmethod
     def _concat(cls, parts) -> str:
