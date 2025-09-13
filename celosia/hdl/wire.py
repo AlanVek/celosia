@@ -81,7 +81,7 @@ class Cell(Component):
     def __getitem__(self, index):
         if isinstance(index, int):
             index, _ = _get_slice_params(slice(index, index+1), self.width)
-            if index == 0:
+            if index == 0 and self.width == 1:
                 return self
         elif isinstance(index, slice):
             start, stop = _get_slice_params(index, self.width)
