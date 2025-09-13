@@ -78,6 +78,17 @@ class Cell(Component):
     def width(self) -> int:
         return self.cell.parameters.get('Y_WIDTH', None) or self.cell.parameters.get('WIDTH', None)
 
+    def __getitem__(self, index):
+        if isinstance(index, int):
+            index, _ = _get_slice_params(slice(index, index+1), self.width)
+            if index == 0:
+                return self
+        elif isinstance(index, slice):
+            start, stop = _get_slice_params(index, self.width)
+            if start == 0 and stop == self.width:
+                return self
+        raise ValueError(f"Cell cannot be sliced with: {index}")
+
 class Slice(Component):
     def __init__(self, wire: Union[rtlil.Wire, Component], start_idx: int = None, stop_idx: int = None):
         offset = 0
