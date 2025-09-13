@@ -1,4 +1,5 @@
 from amaranth.back import rtlil
+from typing import Union
 
 def _get_slice_params(slice: slice, width: int):
     start = slice.start
@@ -19,11 +20,18 @@ def _get_slice_params(slice: slice, width: int):
     return start, stop
 
 class Component:
-    pass
+    @property
+    def width(self) -> int:
+        raise NotImplementedError("Component width must be overwritten!")
 
 class Wire(Component):
-    def __init__(self, wire: rtlil.Wire):
-        self.wire = wire
+    def __init__(self, wire: Union[rtlil.Wire, "Wire"]):
+        if isinstance(wire, Wire):
+            self.wire = wire.wire
+        elif isinstance(wire, rtlil.Wire):
+            self.wire = wire
+        else:
+            raise RuntimeError(f"Invalid wire: {wire}")
 
     @property
     def name(self) -> str:
@@ -58,19 +66,34 @@ class Wire(Component):
         return False
 
 class Cell(Component):
-    def __init__(self, cell: rtlil.Cell):
-        self.cell = cell
+    def __init__(self, cell: Union[rtlil.Cell, "Cell"]):
+        if isinstance(cell, Cell):
+            self.cell = cell.cell
+        elif isinstance(cell, rtlil.Cell):
+            self.cell = cell
+        else:
+            raise ValueError(f"Invalid cell: {cell}")
 
     @property
     def width(self) -> int:
         return self.cell.parameters.get('Y_WIDTH', None) or self.cell.parameters.get('WIDTH', None)
 
 class Slice(Component):
-    def __init__(self, wire: Component, start_idx: int = None, stop_idx: int = None):
-        self.wire = wire
+    def __init__(self, wire: Union[rtlil.Wire, Component], start_idx: int = None, stop_idx: int = None):
+        offset = 0
+        if isinstance(wire, Slice):
+            self.wire = wire.wire
+            offset = wire.start_idx
+        elif isinstance(wire, Component):
+            self.wire = wire
+        elif isinstance(wire, rtlil.Wire):
+            self.wire = Wire(wire)
+        else:
+            raise ValueError(f"Invalid wire to slice: {wire}")
+
         start, stop = _get_slice_params(slice(start_idx, stop_idx), wire.width)
-        self.start_idx = start
-        self.stop_idx = stop
+        self.start_idx = start + offset
+        self.stop_idx = stop + offset
 
     @property
     def width(self) -> int:
@@ -102,7 +125,7 @@ class Slice(Component):
         return False
 
 class Concat(Component):
-    def __init__(self, wires: list[Component]):
+    def __init__(self, wires: list[Union[rtlil.Wire, Component]]):
         self.parts = self._cleanup(wires)
 
     @property
@@ -134,8 +157,12 @@ class Concat(Component):
                     curr_width = wire.parts[-1].width
                 elif isinstance(wire, Concat):
                     real_wires.extend(wire.parts)
-                else:
+                elif isinstance(wire, Component):
                     real_wires.append(wire)
+                elif isinstance(wire, rtlil.Wire):
+                    real_wires.append(Wire(wire))
+                else:
+                    raise ValueError(f"Invalid concat part: {wire}")
 
         curr_value, curr_width = emit_const()
         return real_wires
@@ -243,8 +270,17 @@ class Const(Component):
 
 class MemoryIndex(Component):
     def __init__(self, memory: rtlil.Memory, address: Component):
-        self.memory = memory
-        self.address = address
+        if isinstance(memory, rtlil.Memory):
+            self.memory = memory
+        else:
+            raise ValueError(f"Invalid memory: {memory}")
+
+        if isinstance(address, Component):
+            self.address = address
+        elif isinstance(address, rtlil.Wire):
+            self.addrses = Wire(address)
+        else:
+            raise ValueError(f"Invalid memory address: {address}")
 
     @property
     def name(self) -> str:
