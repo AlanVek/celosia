@@ -34,9 +34,6 @@ class VerilogModule(BaseModule):
         'wor',            'xnor',           'xor',
     ]
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     @classmethod
     def _const(cls, value: Any):
         if isinstance(value, str):
