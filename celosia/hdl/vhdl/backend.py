@@ -135,7 +135,12 @@ class VHDLModule(BaseModule):
 
             value = format(value, f'0{width}{fmt}')
 
-        return f'{fmt}"{value}"'
+        ret = f'{fmt}"{value}"'
+
+        # FIX: One-bit strings may be detected as literals, not std_logic_vector
+        if width == 1:
+            ret = f"std_logic_vector'({ret})"
+        return ret
 
     @classmethod
     def _concat(cls, parts) -> str:
