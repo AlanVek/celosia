@@ -318,9 +318,9 @@ class VHDLModule(BaseModule):
         self._line('begin')
 
         if clock is not None:
-            trigger = f'{"rising" if polarity else "falling"}_edge({self._represent(clock, boolean=True)})'
+            trigger = f'{"rising" if polarity else "falling"}_edge({self._represent(clock)}(0))'
             if arst is not None:
-                trigger += f' or {"rising" if arst_polarity else "falling"}_edge({self._represent(arst, boolean=True)})'
+                trigger += f' or {"rising" if arst_polarity else "falling"}_edge({self._represent(arst)}(0))'
 
             # TODO: Nasty
             self._curr_line_manager.append(self._line.indent())
@@ -419,16 +419,16 @@ class VHDLModule(BaseModule):
 
     def _to_boolean(self, signal: celosia_wire.Component) -> str:
         if isinstance(signal, celosia_wire.Slice):
-            boolean = isinstance(signal.wire, celosia_wire.Cell)
-            wire_rep = self._represent(signal.wire, boolean=boolean)
-            if not boolean:
-                wire_rep = f'{wire_rep}({signal.start_idx})'
+            is_cell = isinstance(signal.wire, celosia_wire.Cell)
+            wire_rep = self._represent(signal.wire, boolean=is_cell)
+            if not is_cell:
+                wire_rep = f"{wire_rep}({signal.start_idx}) = '1'"
             return wire_rep
 
         if isinstance(signal, celosia_wire.Const):
             return 'true' if signal.value else 'false'
 
-        return f'{signal.name}(0)'
+        return f"{signal.name}(0) = '1'"
 
     def _operator_repr(self, operator: rtlil.Cell, boolean: bool = False) -> str:
         # TODO: Any issues with constant unary?
