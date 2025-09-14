@@ -551,7 +551,7 @@ class VHDLModule(BaseModule):
 
             rhs = f'{SHIFT_OPERATORS[operator.kind]}({", ".join(operands)})'
             if boolean:
-                rhs = f'{rhs}(0)'
+                rhs = f"{rhs}(0) = '1'"
             elif resize_output:
                 rhs = f'{rhs}({target_width-1} downto 0)'
 
