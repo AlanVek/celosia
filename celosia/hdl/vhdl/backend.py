@@ -157,9 +157,9 @@ class VHDLModule(BaseModule):
             need_fill = lhs_parsed.width != rhs_parsed.width
 
             # Fix: std_logic != std_logic_vector
-            if isinstance(rhs_parsed, celosia_wire.Slice) and rhs_parsed.width == 1:
-                if not isinstance(lhs_parsed, celosia_wire.Slice):
-                    need_fill = True
+            # if isinstance(rhs_parsed, celosia_wire.Slice) and rhs_parsed.width == 1:
+            #     if not isinstance(lhs_parsed, celosia_wire.Slice):
+            #         need_fill = True
 
             rhs = self._represent(rhs_parsed)
             if need_fill:
@@ -195,6 +195,10 @@ class VHDLModule(BaseModule):
             "$reduce_or",
             "$reduce_and",
             "$reduce_xor",
+            "$not",
+            "$and",
+            "$or",
+            "$xor",
         }
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, need_cast=need_cast)
 
@@ -409,16 +413,18 @@ class VHDLModule(BaseModule):
         if isinstance(value, celosia_wire.Const):
             if value.value < 0:
                 value.value += 2**value.width
-            if signed is not None:
-                if boolean:
-                    value = self._represent(value, boolean=boolean)
-                elif value.value < 2**31:
-                    value = f'to_{prefix}signed({value.value}, {value.width})'
-                else:
-                    value = f"{prefix}signed'({self._represent(value, boolean=boolean)})"
+            if boolean or signed is None:
+                width = value.width
+                value = self._represent(value, boolean=boolean)
+                if not boolean and width > 1:
+                    value = f"std_logic_vector'({value})"
+            elif value.value < 2**31:
+                value = f'to_{prefix}signed({value.value}, {value.width})'
+            else:
+                value = f"{prefix}signed'({self._represent(value, boolean=boolean)})"
         else:
             value = self._represent(value, boolean=boolean)
-            if not boolean:
+            if signed is not None and not boolean:
                 value = f'{prefix}signed({value})'
         return value
 
@@ -477,6 +483,16 @@ class VHDLModule(BaseModule):
         UNARY_OPERATORS.update(BOOL_OPERATORS_UNARY)
         BINARY_OPERATORS.update(BOOL_OPERATORS_BINARY)
 
+        need_sign = {
+            *BOOL_OPERATORS_BINARY.keys(),
+            "$neg",
+            "$add",
+            "$sub",
+            "$mul",
+            "$divfloor",
+            "$modfloor",
+        }
+
         rhs = None
 
         target_width = celosia_wire.Cell(operator).width
@@ -490,7 +506,7 @@ class VHDLModule(BaseModule):
                 operands.append(self._resize_and_sign(
                     value = self._convert_signals(operator.ports[port]),
                     width = target_width,
-                    signed = operator.parameters[f'{port}_SIGNED'],
+                    signed = operator.parameters[f'{port}_SIGNED'] if operator.kind in need_sign else None,
                     ignore_size = operator.kind != '$neg',
                     boolean = boolean and operator.kind not in BOOL_OPERATORS_UNARY,    # Bool operators already generate boolean
                 ))
@@ -510,7 +526,7 @@ class VHDLModule(BaseModule):
                 operands[i] = self._resize_and_sign(
                     value = operands[i],
                     width = operand_width,
-                    signed = operator.parameters[f'{port}_SIGNED'],
+                    signed = operator.parameters[f'{port}_SIGNED'] if operator.kind in need_sign else None,
                     ignore_size = operator.kind == '$mul',
                     boolean = boolean and operator.kind not in BOOL_OPERATORS_BINARY,    # Bool operators already generate boolean
                 )
@@ -539,7 +555,7 @@ class VHDLModule(BaseModule):
                 operand = self._resize_and_sign(
                     value = operand,
                     width = target_width,
-                    signed = operator.parameters[f'{port}_SIGNED'],
+                    signed = None, #operator.parameters[f'{port}_SIGNED'],
                     ignore_size = ignore_size,
                     boolean = False,
                 )
