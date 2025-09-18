@@ -260,8 +260,8 @@ class VerilogModule(BaseModule):
             "$shl": '<<',
             "$shr": '>>',
             "$sshr": '>>', # TODO: Check sign?
-            "$and": '&',
-            "$or": '|',
+            "$and": '&', # TODO: Possibly '&&' if boolean else '&',
+            "$or": '|', # TODO: Possibly '||' if boolean else '|',
             "$xor": '^',
             "$eq": '==',
             "$ne": '!=',
