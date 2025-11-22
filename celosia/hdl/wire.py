@@ -24,6 +24,9 @@ class Component:
     def width(self) -> int:
         raise NotImplementedError("Component width must be overwritten!")
 
+    def __len__(self) -> int:
+        return self.width
+
 class Wire(Component):
     def __init__(self, wire: Union[rtlil.Wire, "Wire"]):
         if isinstance(wire, Wire):

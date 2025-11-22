@@ -605,7 +605,7 @@ class Module(rtlil.Module):
             if isinstance(ret, list):
                 ret = [self._const_repr(r.width, r.value, init=True) for r in ret]
             else:
-                ret = self._const_repr(ret.width, ret.value, init=True)
+                ret = self._const_repr(len(ret), ret.value, init=True)
         else:
             ret = self._const_repr(signal.width, 0, init=True)
         return ret
