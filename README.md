@@ -3,6 +3,8 @@
 
 **celosia** is a Python module that provides a way to convert Amaranth HDL designs into usable HDL code. It aims to offer an alternative workflow for generating hardware description language (HDL) files from Amaranth, supporting both Verilog and VHDL output formats.
 
+For amaranth version < 0.5, use branch [amaranth_0.4](https://github.com/AlanVek/celosia/tree/amaranth_0.4).
+
 ## What is celosia?
 
 celosia is an independent project designed to help users of [Amaranth HDL](https://amaranth-lang.org/) convert their designs into Verilog and VHDL. This module is not affiliated with Amaranth or Yosys, and is developed as a separate effort. The goal is to provide a simple, Pythonic interface for HDL code generation.
