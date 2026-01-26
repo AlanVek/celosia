@@ -94,6 +94,9 @@ class VerilogModule(BaseModule):
 
             value = hex(value)[2:]
 
+        else:
+            raise RuntimeError(f"Unknown format for _const_repr: {type(value)}")
+
         return f"{width}'{format}{value}"
 
     @classmethod

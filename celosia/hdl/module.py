@@ -36,6 +36,14 @@ class Module(rtlil.Module):
 
     @classmethod
     def _const(cls, value: Any):
+        if isinstance(value, float):
+            return value
+        if isinstance(value, (int, _ast.Const)):
+            if isinstance(value, int):
+                width = max(1, value.bit_length())
+            else:
+                value, width = value.value, value.width
+            return cls._const_repr(width, value)
         return _const(value)
 
     @classmethod
@@ -612,7 +620,7 @@ class Module(rtlil.Module):
 
     @staticmethod
     def _const_repr(width, value, init=False):
-        return ''
+        return _const(_ast.Const(value, width))
 
     def _represent(self, signal: celosia_wire.Component, boolean = False) -> str:
         if signal is None:

@@ -135,6 +135,9 @@ class VHDLModule(BaseModule):
 
             value = format(value, f'0{width}{fmt}')
 
+        else:
+            raise RuntimeError(f"Unknown format for _const_repr: {type(value)}")
+
         ret = f'{fmt}"{value}"'
 
         # FIX: One-bit strings may be detected as literals, not std_logic_vector
