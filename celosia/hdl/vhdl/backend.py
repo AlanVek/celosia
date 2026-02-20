@@ -1,6 +1,6 @@
 from celosia.hdl.module import Module as BaseModule
 import celosia.hdl.wire as celosia_wire
-from typing import Any, Union
+from typing import Any
 from amaranth.back import rtlil
 from amaranth.hdl import _ast
 
@@ -39,8 +39,47 @@ class VHDLModule(BaseModule):
         super().__init__(*args, **kwargs)
         self._types: dict[str, tuple[str, str]] = {}
         self._attributes: dict[str, str] = {}
-
+        self._std_logic: dict[str, dict[str, list[str]]] = {}
         self._curr_line_manager = []
+
+    def add_std_logic(self, **std_logic):
+        err_msg = ("""
+        std_logic must be a dictionary of {
+                module_type: {
+                    'ports': list of std_logic port names,
+                    'parameters': list of std_logic parameter names,
+                    'macro': boolean, whether the module is a macro or part of the project
+                }
+            )
+        """)
+
+        def fail(msg: str):
+            raise ValueError(f'{msg}{err_msg}')
+
+        for module_type, std_logic in std_logic.items():
+            if not isinstance(module_type, str):
+                fail(f"Invalid module type in std_logic: {module_type}")
+            if not isinstance(std_logic, dict):
+                fail(f"Invalid std_logic for module type '{module_type}': {std_logic}")
+
+            if module_type in self._std_logic:
+                fail(f"std_logic for module type '{module_type}' received more than once")
+
+            for std_logic_key, std_logic_entries in std_logic.items():
+                if std_logic_key == 'macro':
+                    if not isinstance(std_logic_entries, bool) and std_logic_entries not in (0, 1):
+                        fail(f"Invalid std_logic values for entry '{std_logic_key}' of module type '{module_type}': {std_logic_entries}")
+                elif std_logic_key in ('ports', 'parameters'):
+                    if not isinstance(std_logic_entries, (list, tuple, set)):
+                        fail(f"Invalid std_logic values for entry '{std_logic_key}' of module type '{module_type}': {std_logic_entries}")
+                    for entry in std_logic_entries:
+                        if not isinstance(entry, str):
+                            fail(f"Invalid std_logic value for entry '{std_logic_key}' of module type '{module_type}': {entry}")
+                    std_logic[std_logic_key] = set(std_logic_entries)
+                else:
+                    fail(f"Invalid std_logic entry for module '{module_type}': {std_logic_key}")
+
+            self._std_logic[module_type] = std_logic
 
     @classmethod
     def _const(cls, value: Any):
@@ -205,7 +244,34 @@ class VHDLModule(BaseModule):
         }
         self._emit_assignment_lhs_rhs(assignment.lhs, assignment.rhs, need_cast=need_cast)
 
+    def _std_logic_parameter(self, name: str, value: Any):
+        if isinstance(value, (_ast.Const, celosia_wire.Const)):
+            value = value.value
+
+        if not isinstance(value, int):
+            raise ValueError(f"Invalid value for parameter {name}: {value}")
+
+        assert value in (0, 1, -1), f"Invalid value for parameter {name} of type logic: {value}"
+        return f"'{abs(value)}'"
+
+    def _std_logic_port(self, name: str, value: Any):
+        try:
+            return self._std_logic_parameter(name, value)
+        except ValueError:
+            if not isinstance(value, celosia_wire.Component):
+                raise ValueError(f"Invalid value received for port {name}: {value}") from None
+
+        return self._logic_repr(self._represent(value.wire))
+
     def _emit_submodule_post(self, submodule: rtlil.Cell, instance: bool):
+        std_logic = self._std_logic.get(submodule.kind, None)
+
+        if instance:
+            if std_logic is not None and not std_logic.get('macro', False):
+                instance = False
+        elif std_logic is not None:
+            raise RuntimeError(f"Received std_logic for a module that's not an instance: {submodule.name} (type {submodule.kind})")
+
         with self._line.indent():
             prefix = '' if instance else 'entity work.'
             self._line(f'{submodule.name}: {prefix}{submodule.kind}')
@@ -213,8 +279,12 @@ class VHDLModule(BaseModule):
                 self._line('generic map (')
                 with self._line.indent():
                     for i, (name, value) in enumerate(submodule.parameters.items()):
+                        if std_logic is not None and name in std_logic.get('parameters', ()):
+                            value = self._std_logic_parameter(f'{name} of {submodule.name} of type {submodule.kind}', value)
+                        else:
+                            value = self._const(value)
                         sep = "," if i < len(submodule.parameters) - 1 else ""
-                        self._line(f'{name} => {self._const(value)}{sep}')
+                        self._line(f'{name} => {value}{sep}')
                 self._line(')')
 
             if submodule.ports:
@@ -222,7 +292,11 @@ class VHDLModule(BaseModule):
                 with self._line.indent():
                     for i, (name, value) in enumerate(submodule.ports.items()):
                         sep = "," if i < len(submodule.ports) - 1 else ""
-                        self._line(f'{name} => {self._represent(value)}{sep}')
+                        if std_logic is not None and name in std_logic.get('ports', ()):
+                            value = self._std_logic_port(f'{name} of {submodule.name} of type {submodule.kind}', value)
+                        else:
+                            value = self._represent(value)
+                        self._line(f'{name} => {value}{sep}')
                 self._line(');')
 
     def _parse_attribute(self, key: str, value: Any) -> tuple[str, str, bool]:
@@ -330,9 +404,9 @@ class VHDLModule(BaseModule):
         self._line('begin')
 
         if clock is not None:
-            trigger = f'{"rising" if polarity else "falling"}_edge({self._represent(clock)}(0))'
+            trigger = f'{"rising" if polarity else "falling"}_edge({self._logic_repr(self._represent(clock))})'
             if arst is not None:
-                trigger += f' or {"rising" if arst_polarity else "falling"}_edge({self._represent(arst)}(0))'
+                trigger += f' or {"rising" if arst_polarity else "falling"}_edge({self._logic_repr(self._represent(arst))})'
 
             # TODO: Nasty
             self._curr_line_manager.append(self._line.indent())
@@ -348,12 +422,19 @@ class VHDLModule(BaseModule):
         self._line('end process;')
 
     @classmethod
-    def _slice_repr(cls, name: str, start: int, stop: int=None) -> str:
+    def _slice_repr(cls, name: str, start: int, stop: int=None, logic: bool = False) -> str:
         # if stop is None or stop == start:
         #     idx = start
         # else:
-        idx = f'{stop} downto {start}'
+        if logic and stop == start:
+            idx = f'{start}'
+        else:
+            idx = f'{stop} downto {start}'
         return f'{name}({idx})'
+
+    @classmethod
+    def _logic_repr(cls, name: str, start: int = 0):
+        return cls._slice_repr(name, start, start, logic=True)
 
     def _emit_switch_start(self, sel: str):
         self._line(f'case? ({sel}) is')
@@ -442,7 +523,7 @@ class VHDLModule(BaseModule):
         if isinstance(signal, celosia_wire.Const):
             return 'true' if signal.value else 'false'
 
-        return f"{signal.name}(0) = '1'"
+        return f"{self._logic_repr(signal.name)} = '1'"
 
     def _operator_repr(self, operator: rtlil.Cell, boolean: bool = False) -> str:
         # TODO: Any issues with constant unary?
@@ -570,9 +651,9 @@ class VHDLModule(BaseModule):
 
             rhs = f'{SHIFT_OPERATORS[operator.kind]}({", ".join(operands)})'
             if boolean:
-                rhs = f"{rhs}(0) = '1'"
+                rhs = f"{self._logic_repr(rhs)} = '1'"
             elif resize_output:
-                rhs = f'{rhs}({target_width-1} downto 0)'
+                rhs = self._slice_repr(rhs, start=0, stop=target_width-1)
 
         elif operator.kind == '$mux':
             operands = []

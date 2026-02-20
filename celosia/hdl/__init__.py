@@ -36,6 +36,9 @@ class HDL(metaclass=HDLExtensions):
     def default_extension(self) -> str:
         return type(self).default_extension
 
+    def set_module_params(self, module: Module):
+        return
+
     def generate_overrides(self):
         def _new_add_name(assigned_names: set[str], name: str) -> str:
             name = self.ModuleClass.filter_name(name, assigned_names=assigned_names)
@@ -77,6 +80,9 @@ class HDL(metaclass=HDLExtensions):
 
         class NewDesign(rtlil.Design):
             def __str__(design):
+                for module in design.modules.values():
+                    self.set_module_params(module)
+
                 original = design.modules
                 if self.submodules_first:
                     design.modules = {key: value for key, value in reversed(original.items())}

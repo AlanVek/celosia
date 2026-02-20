@@ -11,12 +11,16 @@ class VHDL(HDL):
     open_comment = '-- '
     close_comment = ''
 
-    def __init__(self, spaces: int = 4, blackboxes: list[dict[str, Union[int, str, tuple]]] = None):
+    def __init__(self, spaces: int = 4, std_logic: dict[str, dict[str, list[str]]] = None):
         self.spaces = spaces
-        self.blackboxes = blackboxes
+        self.std_logic = std_logic or {}
 
-        if blackboxes:
-            raise NotImplementedError("VHDL blackboxes not supported")
+        if not isinstance(self.std_logic, dict):
+            raise ValueError(f"Invalid std_logic received, expected a dictionary, but got: {self.std_logic}")
+
+    def set_module_params(self, module: VHDLModule):
+        if isinstance(module, VHDLModule):
+            module.add_std_logic(**self.std_logic)
 
 def convert(
     elaboratable: Union[_ir.Elaboratable, _ir.Fragment, _ir.Design],
@@ -24,12 +28,12 @@ def convert(
     ports: list[_ast.Signal] = None,
     platform = None,
     spaces: int = 4,
-    blackboxes: list[dict[str, Union[int, str, tuple]]] = None,
+    std_logic: dict[str, dict[str, list[str]]] = None,
     **kwargs
 ):
     return VHDL(
         spaces = spaces,
-        blackboxes = blackboxes,
+        std_logic = std_logic,
     ).convert(
         elaboratable,
         name = name,
