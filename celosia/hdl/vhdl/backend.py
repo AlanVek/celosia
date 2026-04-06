@@ -590,7 +590,7 @@ class VHDLModule(BaseModule):
                 operands.append(self._resize_and_sign(
                     value = self._convert_signals(operator.ports[port]),
                     width = target_width,
-                    signed = operator.parameters[f'{port}_SIGNED'] if operator.kind in need_sign else None,
+                    signed = True if operator.kind == '$neg' else operator.parameters[f'{port}_SIGNED'] if operator.kind in need_sign else None,
                     ignore_size = operator.kind != '$neg',
                     boolean = boolean and operator.kind not in BOOL_OPERATORS_UNARY,    # Bool operators already generate boolean
                 ))
